@@ -11,11 +11,14 @@ import yaml
 from fast_rcnn.config import cfg
 import numpy as np
 import numpy.random as npr
-from generate_anchors import generate_anchors
+from .generate_anchors import generate_anchors
 from utils.cython_bbox import bbox_overlaps
 from fast_rcnn.bbox_transform import bbox_transform
+from utils.timer import Timer
+
 
 DEBUG = False
+t = Timer()
 
 class AnchorTargetLayer(caffe.Layer):
     """
@@ -24,17 +27,23 @@ class AnchorTargetLayer(caffe.Layer):
     """
 
     def setup(self, bottom, top):
-        self._anchors = generate_anchors()
+
+        self._anchors = generate_anchors(base_size=cfg.RPN.ANCHOR_BASE_SIZE,
+                                         ratios=cfg.RPN.ANCHOR_RATIOS,
+                                         scales=cfg.RPN.ANCHOR_SCALES,
+                                         shift_num_xy=cfg.RPN.ANCHOR_SHIFT_NUM_XY)
+
         self._num_anchors = self._anchors.shape[0]
+        t.tic()
 
         if DEBUG:
-            print 'anchors:'
-            print self._anchors
-            print 'anchor shapes:'
-            print np.hstack((
+            print('anchors:')
+            print(self._anchors)
+            print('anchor shapes:')
+            print(np.hstack((
                 self._anchors[:, 2::4] - self._anchors[:, 0::4],
                 self._anchors[:, 3::4] - self._anchors[:, 1::4],
-            ))
+            )))
             self._counts = cfg.EPS
             self._sums = np.zeros((1, 4))
             self._squared_sums = np.zeros((1, 4))
@@ -44,13 +53,14 @@ class AnchorTargetLayer(caffe.Layer):
 
         layer_params = yaml.load(self.param_str_)
         self._feat_stride = layer_params['feat_stride']
+        self._iters = 0
 
         # allow boxes to sit over the edge by a small amount
         self._allowed_border = layer_params.get('allowed_border', 0)
 
         height, width = bottom[0].data.shape[-2:]
         if DEBUG:
-            print 'AnchorTargetLayer: height', height, 'width', width
+            print('AnchorTargetLayer: height', height, 'width', width)
 
         A = self._num_anchors
         # labels
@@ -70,28 +80,37 @@ class AnchorTargetLayer(caffe.Layer):
         #   apply predicted bbox deltas at cell i to each of the 9 anchors
         # filter out-of-image anchors
         # measure GT overlap
+        t.toc()
+        self._iters += 1
 
         assert bottom[0].data.shape[0] == 1, \
             'Only single item batches are supported'
 
         # map of shape (..., H, W)
         height, width = bottom[0].data.shape[-2:]
+
         # GT boxes (x1, y1, x2, y2, label)
         gt_boxes = bottom[1].data
+        ignored_mask = gt_boxes[:, 3] < 0
+
+        gt_ignored_boxes = gt_boxes[ignored_mask, :]
+        gt_boxes = gt_boxes[np.logical_not(ignored_mask), :]
+
         # im_info
         im_info = bottom[2].data[0, :]
 
-        if 0 and DEBUG:
-            print ''
-            print 'im_size: ({}, {})'.format(im_info[0], im_info[1])
-            print 'scale: {}'.format(im_info[2])
-            print 'height, width: ({}, {})'.format(height, width)
+        if DEBUG:
+            print('')
+            print('im_size: ({}, {})'.format(im_info[0], im_info[1]))
+            print('scale: {}'.format(im_info[2]))
+            print('height, width: ({}, {})'.format(height, width))
             #print 'rpn: gt_boxes.shape', gt_boxes.shape
             #print 'rpn: gt_boxes', gt_boxes
 
         # 1. Generate proposals from bbox deltas and shifted anchors
         shift_x = np.arange(0, width) * self._feat_stride
         shift_y = np.arange(0, height) * self._feat_stride
+
         shift_x, shift_y = np.meshgrid(shift_x, shift_y)
         shifts = np.vstack((shift_x.ravel(), shift_y.ravel(),
                             shift_x.ravel(), shift_y.ravel())).transpose()
@@ -114,14 +133,15 @@ class AnchorTargetLayer(caffe.Layer):
             (all_anchors[:, 3] < im_info[0] + self._allowed_border)    # height
         )[0]
 
+
         if DEBUG:
-            print 'total_anchors', total_anchors
-            print 'inds_inside', len(inds_inside)
+            print('total_anchors', total_anchors)
+            print('inds_inside', len(inds_inside))
 
         # keep only inside anchors
         anchors = all_anchors[inds_inside, :]
         if DEBUG:
-            print 'anchors.shape', anchors.shape
+            print('anchors.shape', anchors.shape)
 
         # label: 1 is positive, 0 is negative, -1 is dont care
         labels = np.empty((len(inds_inside), ), dtype=np.float32)
@@ -132,19 +152,23 @@ class AnchorTargetLayer(caffe.Layer):
         overlaps = bbox_overlaps(
             np.ascontiguousarray(anchors, dtype=np.float),
             np.ascontiguousarray(gt_boxes, dtype=np.float))
+
         argmax_overlaps = overlaps.argmax(axis=1)
         max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
+
         gt_argmax_overlaps = overlaps.argmax(axis=0)
         gt_max_overlaps = overlaps[gt_argmax_overlaps,
                                    np.arange(overlaps.shape[1])]
         gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
+
 
         if not cfg.TRAIN.RPN_CLOBBER_POSITIVES:
             # assign bg labels first so that positive labels can clobber them
             labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
 
         # fg label: for each gt, anchor with highest overlap
-        labels[gt_argmax_overlaps] = 1
+        if np.max(max_overlaps) > 0.2:
+            labels[gt_argmax_overlaps] = 1
 
         # fg label: above threshold IOU
         labels[max_overlaps >= cfg.TRAIN.RPN_POSITIVE_OVERLAP] = 1
@@ -152,6 +176,17 @@ class AnchorTargetLayer(caffe.Layer):
         if cfg.TRAIN.RPN_CLOBBER_POSITIVES:
             # assign bg labels last so that negative labels can clobber positives
             labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
+
+       # ignored label
+        if len(gt_ignored_boxes):
+            gt_ignored_boxes[:, 3] *= -1
+            ignored_overlaps = bbox_overlaps(
+                np.ascontiguousarray(anchors, dtype=np.float),
+                np.ascontiguousarray(gt_ignored_boxes, dtype=np.float))
+
+            iargmax_overlaps = ignored_overlaps.argmax(axis=1)
+            imax_overlaps = ignored_overlaps[np.arange(len(inds_inside)), iargmax_overlaps]
+            labels[imax_overlaps > 0.35] = -1
 
         # subsample positive labels if we have too many
         num_fg = int(cfg.TRAIN.RPN_FG_FRACTION * cfg.TRAIN.RPN_BATCHSIZE)
@@ -161,16 +196,34 @@ class AnchorTargetLayer(caffe.Layer):
                 fg_inds, size=(len(fg_inds) - num_fg), replace=False)
             labels[disable_inds] = -1
 
+
         # subsample negative labels if we have too many
         num_bg = cfg.TRAIN.RPN_BATCHSIZE - np.sum(labels == 1)
         bg_inds = np.where(labels == 0)[0]
         if len(bg_inds) > num_bg:
+            keep_first = np.floor(num_bg * cfg.TRAIN.RPN_TOP_NEGATIVE_FRACTION)
+            # keep_first = 0 # np.floor(num_bg * (self._iters * 0.000005))
+            # if self._iters % 20 == 0:
+            #     print(self._iters * 0.000005)
+
+            if keep_first > 0:
+                # scores are (1, A, H, W) format
+                # transpose to (1, H, W, A)
+                # reshape to (1 * H * W * A, 1) where rows are ordered by (h, w, a)
+                scores = bottom[4].data[:, self._num_anchors:, :, :]
+                scores = scores.transpose((0, 2, 3, 1)).reshape((-1, 1))
+                scores = scores[inds_inside]
+                order = scores[bg_inds].ravel().argsort()[::-1]
+                bg_inds = bg_inds[order]
+
             disable_inds = npr.choice(
-                bg_inds, size=(len(bg_inds) - num_bg), replace=False)
+                bg_inds[keep_first:], size=(len(bg_inds) - num_bg), replace=False)
             labels[disable_inds] = -1
             #print "was %s inds, disabling %s, now %s inds" % (
                 #len(bg_inds), len(disable_inds), np.sum(labels == 0))
 
+        # print (np.round(t.diff, 4), np.round(t.average_time, 4),
+        #        np.sum(labels == -1), np.sum(labels == 0), np.sum(labels == 1))
         bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)
         bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
 
@@ -199,10 +252,10 @@ class AnchorTargetLayer(caffe.Layer):
             self._counts += np.sum(labels == 1)
             means = self._sums / self._counts
             stds = np.sqrt(self._squared_sums / self._counts - means ** 2)
-            print 'means:'
-            print means
-            print 'stdevs:'
-            print stds
+            print('means:')
+            print(means)
+            print('stdevs:')
+            print(stds)
 
         # map up to original set of anchors
         labels = _unmap(labels, total_anchors, inds_inside, fill=-1)
@@ -211,14 +264,14 @@ class AnchorTargetLayer(caffe.Layer):
         bbox_outside_weights = _unmap(bbox_outside_weights, total_anchors, inds_inside, fill=0)
 
         if DEBUG:
-            print 'rpn: max max_overlap', np.max(max_overlaps)
-            print 'rpn: num_positive', np.sum(labels == 1)
-            print 'rpn: num_negative', np.sum(labels == 0)
+            print('rpn: max max_overlap', np.max(max_overlaps))
+            print('rpn: num_positive', np.sum(labels == 1))
+            print('rpn: num_negative', np.sum(labels == 0))
             self._fg_sum += np.sum(labels == 1)
             self._bg_sum += np.sum(labels == 0)
             self._count += 1
-            print 'rpn: num_positive avg', self._fg_sum / self._count
-            print 'rpn: num_negative avg', self._bg_sum / self._count
+            print('rpn: num_positive avg', self._fg_sum / self._count)
+            print('rpn: num_negative avg', self._bg_sum / self._count)
 
         # labels
         labels = labels.reshape((1, height, width, A)).transpose(0, 3, 1, 2)
@@ -247,6 +300,8 @@ class AnchorTargetLayer(caffe.Layer):
         assert bbox_outside_weights.shape[3] == width
         top[3].reshape(*bbox_outside_weights.shape)
         top[3].data[...] = bbox_outside_weights
+
+        t.tic()
 
     def backward(self, top, propagate_down, bottom):
         """This layer does not propagate gradients."""
@@ -279,3 +334,5 @@ def _compute_targets(ex_rois, gt_rois):
     assert gt_rois.shape[1] == 5
 
     return bbox_transform(ex_rois, gt_rois[:, :4]).astype(np.float32, copy=False)
+
+

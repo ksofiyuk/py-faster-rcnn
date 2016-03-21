@@ -23,3 +23,5 @@ add_path(caffe_path)
 # Add lib to PYTHONPATH
 lib_path = osp.join(this_dir, '..', 'lib')
 add_path(lib_path)
+
+add_path('/home/local/work/deep-detector')

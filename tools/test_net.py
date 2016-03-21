@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # --------------------------------------------------------
 # Fast R-CNN
@@ -38,12 +38,13 @@ def parse_args():
                         default=True, type=bool)
     parser.add_argument('--imdb', dest='imdb_name',
                         help='dataset to test',
-                        default='voc_2007_test', type=str)
+                        default=None, type=str)
     parser.add_argument('--comp', dest='comp_mode', help='competition mode',
                         action='store_true')
     parser.add_argument('--set', dest='set_cfgs',
                         help='set config keys', default=None,
                         nargs=argparse.REMAINDER)
+    parser.add_argument('--exp_dir', dest='exp_dir', default=None, type=str)
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -63,19 +64,25 @@ if __name__ == '__main__':
     if args.set_cfgs is not None:
         cfg_from_list(args.set_cfgs)
 
+    if args.exp_dir is not None:
+        cfg.EXP_DIR = args.exp_dir
+
     cfg.GPU_ID = args.gpu_id
 
     print('Using config:')
     pprint.pprint(cfg)
 
     while not os.path.exists(args.caffemodel) and args.wait:
-        print('Waiting for {} to exist...'.format(args.caffemodel))
+        print(('Waiting for {} to exist...'.format(args.caffemodel)))
         time.sleep(10)
 
     caffe.set_mode_gpu()
     caffe.set_device(args.gpu_id)
     net = caffe.Net(args.prototxt, args.caffemodel, caffe.TEST)
     net.name = os.path.splitext(os.path.basename(args.caffemodel))[0]
+
+    if args.imdb_name is None:
+        args.imdb_name = cfg.TEST.DATASET
 
     imdb = get_imdb(args.imdb_name)
     imdb.competition_mode(args.comp_mode)

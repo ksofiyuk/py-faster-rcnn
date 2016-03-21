@@ -13,6 +13,7 @@ import numpy as np
 import scipy.sparse
 from fast_rcnn.config import cfg
 
+
 class imdb(object):
     """Image database."""
 
@@ -96,28 +97,13 @@ class imdb(object):
         raise NotImplementedError
 
     def append_flipped_images(self):
-        num_images = self.num_images
-        widths = [PIL.Image.open(self.image_path_at(i)).size[0]
-                  for i in xrange(num_images)]
-        for i in xrange(num_images):
-            boxes = self.roidb[i]['boxes'].copy()
-            oldx1 = boxes[:, 0].copy()
-            oldx2 = boxes[:, 2].copy()
-            boxes[:, 0] = widths[i] - oldx2 - 1
-            boxes[:, 2] = widths[i] - oldx1 - 1
-            assert (boxes[:, 2] >= boxes[:, 0]).all()
-            entry = {'boxes' : boxes,
-                     'gt_overlaps' : self.roidb[i]['gt_overlaps'],
-                     'gt_classes' : self.roidb[i]['gt_classes'],
-                     'flipped' : True}
-            self.roidb.append(entry)
-        self._image_index = self._image_index * 2
+        assert "Fail"
 
     def evaluate_recall(self, candidate_boxes=None, ar_thresh=0.5):
         # Record max overlap value for each gt box
         # Return vector of overlap values
         gt_overlaps = np.zeros(0)
-        for i in xrange(self.num_images):
+        for i in range(self.num_images):
             gt_inds = np.where(self.roidb[i]['gt_classes'] > 0)[0]
             gt_boxes = self.roidb[i]['boxes'][gt_inds, :]
 
@@ -133,7 +119,7 @@ class imdb(object):
 
             # gt_overlaps = np.hstack((gt_overlaps, overlaps.max(axis=0)))
             _gt_overlaps = np.zeros((gt_boxes.shape[0]))
-            for j in xrange(gt_boxes.shape[0]):
+            for j in range(gt_boxes.shape[0]):
                 argmax_overlaps = overlaps.argmax(axis=0)
                 max_overlaps = overlaps.max(axis=0)
                 gt_ind = max_overlaps.argmax()
@@ -162,7 +148,7 @@ class imdb(object):
         assert len(box_list) == self.num_images, \
                 'Number of boxes must match number of ground-truth images'
         roidb = []
-        for i in xrange(self.num_images):
+        for i in range(self.num_images):
             boxes = box_list[i]
             num_boxes = boxes.shape[0]
             overlaps = np.zeros((num_boxes, self.num_classes), dtype=np.float32)
@@ -188,7 +174,7 @@ class imdb(object):
     @staticmethod
     def merge_roidbs(a, b):
         assert len(a) == len(b)
-        for i in xrange(len(a)):
+        for i in range(len(a)):
             a[i]['boxes'] = np.vstack((a[i]['boxes'], b[i]['boxes']))
             a[i]['gt_classes'] = np.hstack((a[i]['gt_classes'],
                                             b[i]['gt_classes']))

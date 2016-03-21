@@ -16,6 +16,7 @@ import os
 
 from caffe.proto import caffe_pb2
 import google.protobuf as pb2
+import pickle
 
 class SolverWrapper(object):
     """A simple wrapper around Caffe's solver.
@@ -35,15 +36,15 @@ class SolverWrapper(object):
             assert cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED
 
         if cfg.TRAIN.BBOX_REG:
-            print 'Computing bounding-box regression targets...'
+            print('Computing bounding-box regression targets...')
             self.bbox_means, self.bbox_stds = \
                     rdl_roidb.add_bbox_regression_targets(roidb)
-            print 'done'
+            print('done')
 
         self.solver = caffe.SGDSolver(solver_prototxt)
         if pretrained_model is not None:
-            print ('Loading pretrained model '
-                   'weights from {:s}').format(pretrained_model)
+            print(('Loading pretrained model '
+                   'weights from {:s}').format(pretrained_model))
             self.solver.net.copy_from(pretrained_model)
 
         self.solver_param = caffe_pb2.SolverParameter()
@@ -60,7 +61,7 @@ class SolverWrapper(object):
 
         scale_bbox_params = (cfg.TRAIN.BBOX_REG and
                              cfg.TRAIN.BBOX_NORMALIZE_TARGETS and
-                             net.params.has_key('bbox_pred'))
+                             'bbox_pred' in net.params)
 
         if scale_bbox_params:
             # save original values
@@ -85,7 +86,7 @@ class SolverWrapper(object):
         filename = os.path.join(self.output_dir, filename)
 
         net.save(str(filename))
-        print 'Wrote snapshot to: {:s}'.format(filename)
+        print('Wrote snapshot to: {:s}'.format(filename))
 
         if scale_bbox_params:
             # restore net to original state
@@ -98,42 +99,54 @@ class SolverWrapper(object):
         last_snapshot_iter = -1
         timer = Timer()
         model_paths = []
+        iters_info = []
         while self.solver.iter < max_iters:
             # Make one SGD update
             timer.tic()
+            self.solver.net.layers[0].next_blob()
             self.solver.step(1)
             timer.toc()
             if self.solver.iter % (10 * self.solver_param.display) == 0:
-                print 'speed: {:.3f}s / iter'.format(timer.average_time)
+                print('speed: {:.3f}s / iter'.format(timer.average_time))
 
             if self.solver.iter % cfg.TRAIN.SNAPSHOT_ITERS == 0:
                 last_snapshot_iter = self.solver.iter
                 model_paths.append(self.snapshot())
 
+            bbox_loss = self.solver.net.blobs['rpn_loss_bbox'].data.copy()
+            cls_loss = self.solver.net.blobs['rpn_cls_loss'].data.copy()
+            image_path = self.solver.net.layers[0]._forward_image
+            iters_info.append((image_path, cls_loss, bbox_loss))
+
+            if self.solver.iter % 100 == 0:
+                if not os.path.exists(self.output_dir):
+                    os.makedirs(self.output_dir)
+                save_path = os.path.join(self.output_dir, 'iters_info.pickle')
+                with open(save_path, 'wb') as f:
+                    pickle.dump(iters_info, f)
+
         if last_snapshot_iter != self.solver.iter:
             model_paths.append(self.snapshot())
         return model_paths
 
+
 def get_training_roidb(imdb):
     """Returns a roidb (Region of Interest database) for use in training."""
-    if cfg.TRAIN.USE_FLIPPED:
-        print 'Appending horizontally-flipped training examples...'
-        imdb.append_flipped_images()
-        print 'done'
-
-    print 'Preparing training data...'
-    rdl_roidb.prepare_roidb(imdb)
-    print 'done'
-
     return imdb.roidb
 
+
 def train_net(solver_prototxt, roidb, output_dir,
-              pretrained_model=None, max_iters=40000):
+              pretrained_model=None, max_iters=None):
+    if max_iters is None:
+        max_iters = cfg.TRAIN.MAX_ITERS
+    if pretrained_model is None:
+        pretrained_model = cfg.WEIGHTS_PATH
+
     """Train a Fast R-CNN network."""
     sw = SolverWrapper(solver_prototxt, roidb, output_dir,
                        pretrained_model=pretrained_model)
 
-    print 'Solving...'
+    print('Solving...')
     model_paths = sw.train_model(max_iters)
-    print 'done solving'
+    print('done solving')
     return model_paths

@@ -11,8 +11,9 @@ import numpy as np
 import numpy.random as npr
 from fast_rcnn.config import cfg
 from fast_rcnn.bbox_transform import bbox_transform
-from generate_anchors import generate_anchors
+from .generate_anchors import generate_anchors
 from utils.cython_bbox import bbox_overlaps
+from fast_rcnn.nms_wrapper import nms
 
 DEBUG = False
 
@@ -23,12 +24,15 @@ class ProposalTargetLayer(caffe.Layer):
     """
 
     def setup(self, bottom, top):
-        self._anchors = generate_anchors()
+        self._anchors = generate_anchors(base_size=cfg.RPN.ANCHOR_BASE_SIZE,
+                                         ratios=cfg.RPN.ANCHOR_RATIOS,
+                                         scales=cfg.RPN.ANCHOR_SCALES,
+                                         shift_num_xy=cfg.RPN.ANCHOR_SHIFT_NUM_XY)
         self._num_anchors = self._anchors.shape[0]
 
         if DEBUG:
-            print 'anchors:'
-            print self._anchors
+            print('anchors:')
+            print(self._anchors)
             self._count = 0
             self._fg_num = 0
             self._bg_num = 0
@@ -77,14 +81,14 @@ class ProposalTargetLayer(caffe.Layer):
             rois_per_image, self._num_classes)
 
         if DEBUG:
-            print 'num fg: {}'.format((labels > 0).sum())
-            print 'num bg: {}'.format((labels == 0).sum())
+            print('num fg: {}'.format((labels > 0).sum()))
+            print('num bg: {}'.format((labels == 0).sum()))
             self._count += 1
             self._fg_num += (labels > 0).sum()
             self._bg_num += (labels == 0).sum()
-            print 'num fg avg: {}'.format(self._fg_num / self._count)
-            print 'num bg avg: {}'.format(self._bg_num / self._count)
-            print 'ratio: {:.3f}'.format(float(self._fg_num) / float(self._bg_num))
+            print('num fg avg: {}'.format(self._fg_num / self._count))
+            print('num bg avg: {}'.format(self._bg_num / self._count))
+            print('ratio: {:.3f}'.format(float(self._fg_num) / float(self._bg_num)))
 
         # sampled rois
         top[0].reshape(*rois.shape)
@@ -157,8 +161,21 @@ def _compute_targets(ex_rois, gt_rois, labels):
 
 def _sample_rois(all_rois, gt_boxes, fg_rois_per_image, rois_per_image, num_classes):
     """Generate a random sample of RoIs comprising foreground and background
-    examples.
+    examples
     """
+
+    # Remove boxes that overlaps with ignored gt boxes
+    ignored_mask = gt_boxes[:, 3] < 0
+    gt_ignored_boxes = gt_boxes[ignored_mask, :]
+    gt_boxes = gt_boxes[np.logical_not(ignored_mask), :]
+
+    if len(gt_ignored_boxes):
+        ignored_overlaps = bbox_overlaps(
+            np.ascontiguousarray(all_rois[:, 1:5], dtype=np.float),
+            np.ascontiguousarray(gt_ignored_boxes[:, :4], dtype=np.float))
+        max_ignored_overlaps = ignored_overlaps.max(axis=1)
+        all_rois = all_rois[max_ignored_overlaps < 0.4, :]  # FIXME: Remove this hardcoded constant
+
     # overlaps: (rois x gt_boxes)
     overlaps = bbox_overlaps(
         np.ascontiguousarray(all_rois[:, 1:5], dtype=np.float),
@@ -176,24 +193,40 @@ def _sample_rois(all_rois, gt_boxes, fg_rois_per_image, rois_per_image, num_clas
     if fg_inds.size > 0:
         fg_inds = npr.choice(fg_inds, size=fg_rois_per_this_image, replace=False)
 
-    # Select background RoIs as those within [BG_THRESH_LO, BG_THRESH_HI)
-    bg_inds = np.where((max_overlaps < cfg.TRAIN.BG_THRESH_HI) &
-                       (max_overlaps >= cfg.TRAIN.BG_THRESH_LO))[0]
     # Compute number of background RoIs to take from this image (guarding
     # against there being fewer than desired)
     bg_rois_per_this_image = rois_per_image - fg_rois_per_this_image
-    bg_rois_per_this_image = min(bg_rois_per_this_image, bg_inds.size)
-    # Sample background regions without replacement
-    if bg_inds.size > 0:
-        bg_inds = npr.choice(bg_inds, size=bg_rois_per_this_image, replace=False)
+
+    NEAR_FRACTION = 0.2
+    bg_near_cnt = int(np.floor(bg_rois_per_this_image * NEAR_FRACTION))
+    bg_near_inds = np.where((max_overlaps < cfg.TRAIN.BG_THRESH_HI) &
+                            (max_overlaps >= cfg.TRAIN.BG_THRESH_LO))[0]
+    bg_near_cnt = min(bg_near_cnt, bg_near_inds.size)
+    if bg_near_inds.size > 0:
+        bg_near_inds = npr.choice(bg_near_inds, size=bg_near_cnt, replace=False)
+
+    bg_far_cnt = bg_rois_per_this_image - bg_near_cnt
+    bg_far_inds = (np.where(max_overlaps < 0.01)[0])[:300]
+
+    bg_far_cnt = min(bg_far_cnt, bg_far_inds.size)
+    bg_far_inds = npr.choice(bg_far_inds, size=bg_far_cnt, replace=False)
+    bg_inds = np.append(bg_near_inds, bg_far_inds)
+
+    # bg_rois_per_this_image = min(bg_rois_per_this_image, bg_inds.size)
+    # # Sample background regions without replacement
+    # if bg_inds.size > 0:
+    #     bg_inds = npr.choice(bg_inds, size=bg_rois_per_this_image, replace=False)
 
     # The indices that we're selecting (both fg and bg)
     keep_inds = np.append(fg_inds, bg_inds)
+
     # Select sampled values from various arrays:
     labels = labels[keep_inds]
     # Clamp labels for the background RoIs to 0
     labels[fg_rois_per_this_image:] = 0
     rois = all_rois[keep_inds]
+
+    # keep2 = nms(np.hstack((rois, np.linspace(1, 0, len(rois), dtype=np.float32).reshape(-1, 1))), 0.5)
 
     bbox_target_data = _compute_targets(
         rois[:, 1:5], gt_boxes[gt_assignment[keep_inds], :4], labels)

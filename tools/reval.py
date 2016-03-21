@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # --------------------------------------------------------
 # Fast R-CNN
@@ -13,7 +13,7 @@ import _init_paths
 from fast_rcnn.test import apply_nms
 from fast_rcnn.config import cfg
 from datasets.factory import get_imdb
-import cPickle
+import pickle
 import os, sys, argparse
 import numpy as np
 
@@ -45,13 +45,13 @@ def from_dets(imdb_name, output_dir, args):
     imdb.competition_mode(args.comp_mode)
     imdb.config['matlab_eval'] = args.matlab_eval
     with open(os.path.join(output_dir, 'detections.pkl'), 'rb') as f:
-        dets = cPickle.load(f)
+        dets = pickle.load(f)
 
-    print 'Applying NMS to all detections'
+    print('Applying NMS to all detections')
     cfg.USE_GPU_NMS = False # much faster than GPU NMS for small number of dets
     nms_dets = apply_nms(dets, cfg.TEST.NMS)
 
-    print 'Evaluating detections'
+    print('Evaluating detections')
     imdb.evaluate_detections(nms_dets, output_dir)
 
 if __name__ == '__main__':

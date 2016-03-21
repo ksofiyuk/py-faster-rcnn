@@ -28,6 +28,16 @@ __C = edict()
 cfg = __C
 
 #
+# RPN options
+#
+__C.RPN = edict()
+__C.RPN.ANCHOR_BASE_SIZE = 16
+__C.RPN.ANCHOR_RATIOS = (0.5, 1, 2)
+__C.RPN.ANCHOR_SCALES = (2 ** np.arange(3, 6)).tolist()
+__C.RPN.ANCHOR_SHIFT_NUM_XY = [(1,1)]
+
+
+#
 # Training options
 #
 
@@ -56,9 +66,12 @@ __C.TRAIN.FG_THRESH = 0.5
 # overlap in [LO, HI))
 __C.TRAIN.BG_THRESH_HI = 0.5
 __C.TRAIN.BG_THRESH_LO = 0.1
+__C.TRAIN.BG_PROB = 0.1
 
 # Use horizontally-flipped images during training?
 __C.TRAIN.USE_FLIPPED = True
+
+__C.TRAIN.GENERATED_FRACTION = 0.0
 
 # Train bounding-box regressors
 __C.TRAIN.BBOX_REG = True
@@ -66,6 +79,9 @@ __C.TRAIN.BBOX_REG = True
 # Overlap required between a ROI and ground-truth box in order for that ROI to
 # be used as a bounding-box regression training example
 __C.TRAIN.BBOX_THRESH = 0.5
+
+# Number of total train iterations
+__C.TRAIN.MAX_ITERS = 70000
 
 # Iterations between snapshots
 __C.TRAIN.SNAPSHOT_ITERS = 10000
@@ -123,6 +139,9 @@ __C.TRAIN.RPN_BBOX_INSIDE_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
 # Set to -1.0 to use uniform example weighting
 __C.TRAIN.RPN_POSITIVE_WEIGHT = -1.0
 
+__C.TRAIN.RPN_TOP_NEGATIVE_FRACTION = 0.0
+
+__C.TRAIN.DATASET = 'default'
 
 #
 # Testing options
@@ -145,6 +164,9 @@ __C.TEST.NMS = 0.3
 # predictors (trained, eg, with one-vs-rest SVMs).
 __C.TEST.SVM = False
 
+# Get detections only from RPN
+__C.TEST.RPN_ONLY = False
+
 # Test using bounding-box regressors
 __C.TEST.BBOX_REG = True
 
@@ -163,6 +185,7 @@ __C.TEST.RPN_POST_NMS_TOP_N = 300
 # Proposal height and width both need to be greater than RPN_MIN_SIZE (at orig image scale)
 __C.TEST.RPN_MIN_SIZE = 16
 
+__C.TEST.DATASET = 'default'
 
 #
 # MISC
@@ -195,6 +218,9 @@ __C.DATA_DIR = osp.abspath(osp.join(__C.ROOT_DIR, 'data'))
 # Model directory
 __C.MODELS_DIR = osp.abspath(osp.join(__C.ROOT_DIR, 'models'))
 
+# Model weights path
+__C.WEIGHTS_PATH = 'default'
+
 # Name (or path to) the matlab executable
 __C.MATLAB = 'matlab'
 
@@ -214,7 +240,7 @@ def get_output_dir(imdb, net):
     A canonical path is built using the name from an imdb and a network
     (if not None).
     """
-    path = osp.abspath(osp.join(__C.ROOT_DIR, 'output', __C.EXP_DIR, imdb.name))
+    path = osp.abspath(osp.join(__C.ROOT_DIR, 'exps', __C.EXP_DIR, 'output', imdb.name))
     if net is None:
         return path
     else:
@@ -227,9 +253,9 @@ def _merge_a_into_b(a, b):
     if type(a) is not edict:
         return
 
-    for k, v in a.iteritems():
+    for k, v in a.items():
         # a must specify keys that are in b
-        if not b.has_key(k):
+        if k not in b:
             raise KeyError('{} is not a valid config key'.format(k))
 
         # the types must match, too
@@ -247,7 +273,7 @@ def _merge_a_into_b(a, b):
             try:
                 _merge_a_into_b(a[k], b[k])
             except:
-                print('Error under config key: {}'.format(k))
+                print(('Error under config key: {}'.format(k)))
                 raise
         else:
             b[k] = v
@@ -268,10 +294,10 @@ def cfg_from_list(cfg_list):
         key_list = k.split('.')
         d = __C
         for subkey in key_list[:-1]:
-            assert d.has_key(subkey)
+            assert subkey in d
             d = d[subkey]
         subkey = key_list[-1]
-        assert d.has_key(subkey)
+        assert subkey in d
         try:
             value = literal_eval(v)
         except:
