@@ -57,6 +57,7 @@ class AnchorTargetLayer(caffe.Layer):
 
         # allow boxes to sit over the edge by a small amount
         self._allowed_border = layer_params.get('allowed_border', 0)
+        self._top_neg_fraction = cfg.TRAIN.RPN_LINEAR_START_TNF
 
         height, width = bottom[0].data.shape[-2:]
         if DEBUG:
@@ -99,7 +100,7 @@ class AnchorTargetLayer(caffe.Layer):
         # im_info
         im_info = bottom[2].data[0, :]
 
-        if DEBUG:
+        if 0 and DEBUG:
             print('')
             print('im_size: ({}, {})'.format(im_info[0], im_info[1]))
             print('scale: {}'.format(im_info[2]))
@@ -149,9 +150,11 @@ class AnchorTargetLayer(caffe.Layer):
 
         # overlaps between the anchors and the gt boxes
         # overlaps (ex, gt)
+
+        boxes = _square_boxes(gt_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_boxes
         overlaps = bbox_overlaps(
             np.ascontiguousarray(anchors, dtype=np.float),
-            np.ascontiguousarray(gt_boxes, dtype=np.float))
+            np.ascontiguousarray(boxes, dtype=np.float))
 
         argmax_overlaps = overlaps.argmax(axis=1)
         max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
@@ -180,31 +183,39 @@ class AnchorTargetLayer(caffe.Layer):
        # ignored label
         if len(gt_ignored_boxes):
             gt_ignored_boxes[:, 3] *= -1
+            boxes = _square_boxes(gt_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_boxes
             ignored_overlaps = bbox_overlaps(
                 np.ascontiguousarray(anchors, dtype=np.float),
-                np.ascontiguousarray(gt_ignored_boxes, dtype=np.float))
+                np.ascontiguousarray(boxes, dtype=np.float))
 
             iargmax_overlaps = ignored_overlaps.argmax(axis=1)
             imax_overlaps = ignored_overlaps[np.arange(len(inds_inside)), iargmax_overlaps]
-            labels[imax_overlaps > 0.35] = -1
+            labels[imax_overlaps > 0.4] = -1
 
         # subsample positive labels if we have too many
+        # num_fg = len(fg_inds)
         num_fg = int(cfg.TRAIN.RPN_FG_FRACTION * cfg.TRAIN.RPN_BATCHSIZE)
         fg_inds = np.where(labels == 1)[0]
+
         if len(fg_inds) > num_fg:
             disable_inds = npr.choice(
                 fg_inds, size=(len(fg_inds) - num_fg), replace=False)
             labels[disable_inds] = -1
 
 
+        if cfg.TRAIN.RPN_LINEAR_TNF_K > 0:
+            self._top_neg_fraction = min(self._top_neg_fraction + cfg.TRAIN.RPN_LINEAR_TNF_K, #0.00008
+                                         cfg.TRAIN.RPN_TOP_NEGATIVE_FRACTION)
+        else:
+            self._top_neg_fraction = cfg.TRAIN.RPN_TOP_NEGATIVE_FRACTION
+
         # subsample negative labels if we have too many
+        # num_bg = max(num_fg, cfg.TRAIN.RPN_BATCHSIZE - num_fg)
         num_bg = cfg.TRAIN.RPN_BATCHSIZE - np.sum(labels == 1)
         bg_inds = np.where(labels == 0)[0]
         if len(bg_inds) > num_bg:
-            keep_first = np.floor(num_bg * cfg.TRAIN.RPN_TOP_NEGATIVE_FRACTION)
-            # keep_first = 0 # np.floor(num_bg * (self._iters * 0.000005))
-            # if self._iters % 20 == 0:
-            #     print(self._iters * 0.000005)
+            # print(self._top_neg_fraction)
+            keep_first = np.floor(num_bg * self._top_neg_fraction)
 
             if keep_first > 0:
                 # scores are (1, A, H, W) format
@@ -336,3 +347,13 @@ def _compute_targets(ex_rois, gt_rois):
     return bbox_transform(ex_rois, gt_rois[:, :4]).astype(np.float32, copy=False)
 
 
+def _square_boxes(boxes):
+    ret = boxes.copy()
+    gt_sz = np.sqrt((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3]-boxes[:, 1]))
+    gt_cntr_x = 0.5 * (boxes[:, 0] + boxes[:, 2])
+    gt_cntr_y = 0.5 * (boxes[:, 1] + boxes[:, 3])
+    ret[:, 0] = gt_cntr_x - gt_sz * 0.5
+    ret[:, 1] = gt_cntr_y - gt_sz * 0.5
+    ret[:, 2] = gt_cntr_x + gt_sz * 0.5
+    ret[:, 3] = gt_cntr_y + gt_sz * 0.5
+    return ret

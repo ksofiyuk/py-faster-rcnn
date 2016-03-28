@@ -19,6 +19,7 @@ import pickle
 import heapq
 from utils.blob import im_list_to_blob
 import os
+import re
 
 
 def _get_image_blob(im):
@@ -333,7 +334,11 @@ def test_net(net, imdb):
             inds = np.where(all_boxes[j][i][:, -1] > thresh[j])[0]
             all_boxes[j][i] = all_boxes[j][i][inds, :]
 
-    det_filename = 'detections_rpn.pkl' if cfg.TEST.RPN_ONLY else 'detections.pkl'
+    m = re.match(".*_(\d+)((\..*)|$)", net.name)
+    if m:
+        det_filename = 'detections_' + m.group(1) + ('_rpn.pkl' if cfg.TEST.RPN_ONLY else '.pkl')
+    else:
+        det_filename = 'detections' + ('_rpn.pkl' if cfg.TEST.RPN_ONLY else '.pkl')
 
     det_filepath = os.path.join(output_dir, det_filename)
     with open(det_filepath, 'wb') as f:

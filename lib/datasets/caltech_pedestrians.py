@@ -64,8 +64,8 @@ class caltech_pedestrians(imdb):
         self._positives = []
         self._negatives = []
         if cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(gt, 96, 6, sratio=1.5)
-            self._negatives = collect_random_negatives_from_gt(gt, 20000, 10, (96, 144))
+            self._positives = extract_positives_gt(gt, 80, 6, sratio=1.5)
+            self._negatives = collect_random_negatives_from_gt(gt, 30000, 10, (80, 120))
 
         self._gt_list = sorted(list(gt.items()))
         self._image_index = list(range(len(self._gt_list)))
@@ -138,26 +138,29 @@ class caltech_pedestrians(imdb):
         return gt_roidb
 
     def generate_frame(self):
-        num_pos = 15
+        num_pos = 10
         num_neg = int(num_pos * 0.8)
         samples = random.sample(self._positives, num_pos)
 
         samples += [(x, []) for x in random.sample(self._negatives, num_neg)]
-        samples = [jitter_sample(sample, jittering_angle=8,
+        samples = [jitter_sample(sample, jittering_angle=6,
                                          jittering_contrast=0.2,
                                          jittering_illumination=0.2)
                        for sample in samples]
 
         avg_height_k = sum(min(b[3] for b in boxes if not b[4])/i.shape[0]
                                for i, boxes in samples[:num_pos]) / num_pos
-        samples[:num_pos] = [random_scale_sample(sample, 50, 85)
+        samples[:num_pos] = [random_scale_sample(sample, 50, 90)
                                 for sample in samples[:num_pos]]
-        samples[num_pos:] = [random_scale_sample(sample, 50, 85, avg_height_k)
+        samples[num_pos:] = [random_scale_sample(sample, 50, 90, avg_height_k)
                                 for sample in samples[num_pos:]]
         random.shuffle(samples)
 
         background = cv2.imread(random.choice(self._backgrounds))
         image, boxes = combine_samples(samples, 640, 480, background)
+
+        background = cv2.imread(random.choice(self._backgrounds))
+        image = np.hstack((image, background))
 
         image_path = './generated/%d.jpg' % self._generated_cnt
         roidb_element = self.get_roidb_element(boxes, image_path,
