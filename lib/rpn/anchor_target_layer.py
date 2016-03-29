@@ -183,7 +183,7 @@ class AnchorTargetLayer(caffe.Layer):
        # ignored label
         if len(gt_ignored_boxes):
             gt_ignored_boxes[:, 3] *= -1
-            boxes = _square_boxes(gt_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_boxes
+            boxes = _square_boxes(gt_ignored_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_ignored_boxes
             ignored_overlaps = bbox_overlaps(
                 np.ascontiguousarray(anchors, dtype=np.float),
                 np.ascontiguousarray(boxes, dtype=np.float))

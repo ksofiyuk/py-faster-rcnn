@@ -146,6 +146,7 @@ __C.TRAIN.RPN_SQUARE_TARGETS = False
 
 __C.TRAIN.DATASET = 'default'
 
+__C.TRAIN.DOUBLE_GENERATE = False
 #
 # Testing options
 #
