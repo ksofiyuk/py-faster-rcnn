@@ -3,7 +3,11 @@ from datasets.imdb import imdb
 import numpy as np
 import scipy.sparse
 import random
+import bisect
+import os.path as osp
 
+from pprint import pprint
+from collections import defaultdict
 from fast_rcnn.config import cfg
 from copy import deepcopy
 
@@ -40,12 +44,50 @@ class DetectionsBaseRoidb(imdb):
 
         self.init_params()
 
+        self._pos_lmdb = None
+        self._pos_prob = None
+        self._pos_types = None
+        self._pos_types_indxs = defaultdict(list)
         self._positives = []
         self._negatives = []
         self._gt = {}
         self._backgrounds = []
 
         self.gt_base_init()
+
+        if cfg.TRAIN.USE_LMDB:
+            lmdb_path = osp.abspath(osp.join(cfg.ROOT_DIR, 'exps',
+                                             cfg.EXP_DIR, 'output',
+                                             'lmdb_pos_' + dataset_name))
+            lmdb_exists = osp.exists(lmdb_path)
+
+            self._pos_lmdb = LMDBStore(lmdb_path)
+            if not lmdb_exists:
+                for i, sample in enumerate(self._positives):
+                    self._pos_lmdb.set_value(str(i), sample)
+                    self._pos_types_indxs[sample[1][0][5]].append(i)
+                self._pos_lmdb.set_value('_pos_types_indxs', self._pos_types_indxs)
+            else:
+                self._pos_types_indxs = self._pos_lmdb.get_value('_pos_types_indxs')
+        else:
+            self._positives = list(self._positives)
+            for i, (_, boxes) in enumerate(self._positives):
+                self._pos_types_indxs[boxes[0][5]].append(i)
+
+        if cfg.TRAIN.REDISTRIBUTE_CLASSES:
+            cnt_by_types = [(stype, len(indxs)) for stype, indxs in self._pos_types_indxs]
+            stypes, cnt = tuple(map(list, zip(*cnt_by_types)))
+            prob = np.array(cnt, dtype=np.float) / np.sum(cnt)
+
+            thresh = 0.4 / len(prob)
+            while np.min(prob) < thresh:
+                low_fr = (np.sum(prob < thresh) + 1) / len(prob)
+                prob = redistribute(prob, low_fr, 0.01, 0.01)
+
+            self._pos_prob = prob
+            self._pos_types = stypes
+            pprint(dict(zip(stypes, list(zip(cnt, prob)))))
+
 
         self._gt_list = sorted(list(self._gt.items()))
         self._image_index = list(range(len(self._gt_list)))
@@ -125,7 +167,19 @@ class DetectionsBaseRoidb(imdb):
     def generate_frame(self):
         num_pos = self.gen_num_pos
         num_neg = self.gen_num_neg
-        samples = random.sample(self._positives, num_pos)
+        samples_indx = []
+
+        if cfg.TRAIN.REDISTRIBUTE_CLASSES:
+            samples_types = prob_sample(self._pos_types_indxs, self._pos_prob, num_pos)
+            for stype in samples_types:
+                samples_indx.append(random.choice(self._pos_types_indxs[stype]))
+        else:
+            samples_indx = random.sample(range(len(self._positives)), num_pos)
+
+        if cfg.TRAIN.USE_LMDB:
+            samples = [self._pos_lmdb.get_value(str(i)) for i in samples_indx]
+        else:
+            samples = [self._positives[i] for i in samples_indx]
 
         neg_samples = []
         while len(neg_samples) < num_neg:
@@ -168,9 +222,14 @@ class DetectionsBaseRoidb(imdb):
         if cfg.TRAIN.DOUBLE_GENERATE:
             background_path, background_boxes = random.choice(self._backgrounds)
             background = cv2.imread(background_path)
-            scale_x = self.gen_width / background.shape[1]
             scale_y = self.gen_height / background.shape[0]
-            background = cv2.resize(background, (self.gen_width, self.gen_height))
+            new_width = int(scale_y * background.shape[1])
+            scale_x = new_width / background.shape[1]
+            background = cv2.resize(background, (new_width, self.gen_height))
+            # if np.random.uniform() > 0.5:
+            #     background = background[:, :background.shape[1]//2, :]
+            # else:
+            #     background = background[:, background.shape[1]//2:, :]
 
             for box in background_boxes:
                 box[0] *= scale_x
@@ -193,6 +252,51 @@ class DetectionsBaseRoidb(imdb):
 
     def image_path_at(self, i):
         return self._gt_list[self._image_index[i]][0]
+
+class RTSDSigns(DetectionsBaseRoidb):
+    def __init__(self, dataset_path, mode):
+        assert mode in ['train', 'test'], "Unknown mode"
+
+        self._mode = mode
+        self._dataset_path = dataset_path
+
+        dataset_name = os.path.basename(dataset_path) + '_' + mode
+        super(RTSDSigns, self).__init__(dataset_name)
+
+    def gt_base_init(self):
+        self._classes = ['__background__', 'sign']
+
+        filter_conditions = [('height', 50, 6000), ('width', 10, 5000),
+                             ('sign_class', r'(?!(.*unknown.*))', None),
+                             ('overlapped', 0, 1), ('score', 0, 0.35)]
+
+        self._gt_base = DetectionsBase(os.path.join(self._dataset_path, self._mode), load_gt=True)
+        self._gt_base.set_filter_conditions(filter_conditions)
+
+        self._backgrounds = list(self._gt_base.get_backgrounds(pure_backgrounds=True).items())
+
+        include_backgrounds = self._mode == 'test'
+        self._gt = self._gt_base.get_gt(keep_ignore=True,
+                                        include_backgrounds=include_backgrounds)
+
+        if self._mode == 'train' and cfg.TRAIN.GENERATED_FRACTION > 0:
+            self._positives = extract_positives_gt(self._gt, 80, 6, sratio=1.5)
+
+    def sample_jittering(self, sample):
+        return jitter_sample(sample, jittering_angle=6,
+                                     jittering_contrast=0.2,
+                                     jittering_illumination=0.2)
+
+    def collect_negatives(self):
+        return collect_random_negatives_from_gt(self._gt, 4000, 200, (80, 120))
+
+    def init_params(self):
+        self.gen_num_pos = 10
+        self.gen_num_neg = int(self.gen_num_pos * 0.8)
+        self.gen_width = 640
+        self.gen_height = 480
+        self.gen_min_height = 50
+        self.gen_max_height = 90
 
 
 class CaltechPedestrians(DetectionsBaseRoidb):
@@ -222,7 +326,7 @@ class CaltechPedestrians(DetectionsBaseRoidb):
                                         include_backgrounds=include_backgrounds)
 
         if self._mode == 'train' and cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(self._gt, 80, 6, sratio=1.5)
+            self._positives = extract_positives_gt(self._gt, 80, 5, sratio=1.5)
 
     def sample_jittering(self, sample):
         return jitter_sample(sample, jittering_angle=6,
@@ -376,3 +480,26 @@ def random_scale_sample(sample, min_height, max_height, height_mul=None):
     image = cv2.resize(image, (0, 0), fx=scale, fy=scale)
     return (image, boxes)
 
+
+def redistribute(prob, low_fraction, high_fraction, redistr_k):
+    prob = prob.copy()
+    order = np.argsort(prob)
+
+    high_len = int(high_fraction * len(prob))
+    vsum = np.sum(prob[order[-high_len:]]) * redistr_k
+    prob[order[-high_len:]] -= vsum / high_len
+
+    low_len = int(low_fraction * len(prob))
+    prob[order[:low_len]] += vsum / low_len
+
+    return prob
+
+
+def prob_sample(population, weights, num_samples):
+    assert len(population) == len(weights)
+    cdf_vals = np.cumsum(weights) / np.sum(weights)
+
+    ans = [population[bisect.bisect(cdf_vals, np.random.uniform())]
+           for i in range(num_samples)]
+
+    return ans

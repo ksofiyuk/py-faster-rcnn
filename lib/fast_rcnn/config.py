@@ -147,6 +147,9 @@ __C.TRAIN.RPN_SQUARE_TARGETS = False
 __C.TRAIN.DATASET = 'default'
 
 __C.TRAIN.DOUBLE_GENERATE = False
+__C.TRAIN.REDISTRIBUTE_CLASSES = False
+__C.TRAIN.USE_LMDB = False
+
 #
 # Testing options
 #
