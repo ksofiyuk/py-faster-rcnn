@@ -10,7 +10,7 @@
 __sets = {}
 
 from datasets.pascal_voc import pascal_voc
-from datasets.detections_base_roidb import CaltechPedestrians, TownCenterPedestrians
+from datasets.detections_base_roidb import CaltechPedestrians, TownCenterPedestrians, RTSDSigns
 import numpy as np
 
 def _selective_search_IJCV_top_k(split, year, top_k):
@@ -40,6 +40,9 @@ __sets['caltech_all_test'] = lambda: CaltechPedestrians('/home/local/work/caltec
 
 __sets['towncenter_train'] = lambda: TownCenterPedestrians('/home/local/work/data/town_centre', 'train')
 __sets['towncenter_test'] = lambda: TownCenterPedestrians('/home/local/work/data/town_centre', 'test')
+
+__sets['rtsd_train'] = lambda: RTSDSigns('/home/local/work/rtsd_signs/gt/gt_base_all.pickle', 'train')
+__sets['rtsd_test'] = lambda: RTSDSigns('/home/local/work/rtsd_signs/gt/gt_base_all.pickle', 'test')
 
 # Set up voc_<year>_<split>_top_<k> using selective search "quality" mode
 # but only returning the first k boxes

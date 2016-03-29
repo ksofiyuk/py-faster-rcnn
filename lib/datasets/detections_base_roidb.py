@@ -18,6 +18,7 @@ from augmentation import jitter_sample
 from filesystem_utils import mkdir
 from bbox_utils import get_max_iou
 from lmdb_utils import LMDBStore
+from visual_utils import plot_bboxes
 import cv2
 
 
@@ -69,13 +70,14 @@ class DetectionsBaseRoidb(imdb):
                 self._pos_lmdb.set_value('_pos_types_indxs', self._pos_types_indxs)
             else:
                 self._pos_types_indxs = self._pos_lmdb.get_value('_pos_types_indxs')
+            self._pos_lmdb.commit()
         else:
             self._positives = list(self._positives)
             for i, (_, boxes) in enumerate(self._positives):
                 self._pos_types_indxs[boxes[0][5]].append(i)
 
         if cfg.TRAIN.REDISTRIBUTE_CLASSES:
-            cnt_by_types = [(stype, len(indxs)) for stype, indxs in self._pos_types_indxs]
+            cnt_by_types = [(stype, len(indxs)) for stype, indxs in self._pos_types_indxs.items()]
             stypes, cnt = tuple(map(list, zip(*cnt_by_types)))
             prob = np.array(cnt, dtype=np.float) / np.sum(cnt)
 
@@ -170,7 +172,7 @@ class DetectionsBaseRoidb(imdb):
         samples_indx = []
 
         if cfg.TRAIN.REDISTRIBUTE_CLASSES:
-            samples_types = prob_sample(self._pos_types_indxs, self._pos_prob, num_pos)
+            samples_types = prob_sample(self._pos_types, self._pos_prob, num_pos)
             for stype in samples_types:
                 samples_indx.append(random.choice(self._pos_types_indxs[stype]))
         else:
@@ -204,6 +206,9 @@ class DetectionsBaseRoidb(imdb):
         background_path, background_boxes = random.choice(self._backgrounds)
 
         background = cv2.imread(background_path)
+        if background.shape[1] > self.gen_width:
+            background = background[:, :self.gen_width, :]
+
         scale_x = self.gen_width / background.shape[1]
         scale_y = self.gen_height / background.shape[0]
         background = cv2.resize(background, (self.gen_width, self.gen_height))
@@ -211,6 +216,9 @@ class DetectionsBaseRoidb(imdb):
         image, boxes, inserted_boxes = combine_samples(samples, self.gen_width, self.gen_height, background)
 
         for box in background_boxes:
+            if box[0] + box[2] * 0.5 > self.gen_width:
+                continue
+
             box[0] *= scale_x
             box[1] *= scale_y
             box[2] *= scale_x
@@ -226,10 +234,6 @@ class DetectionsBaseRoidb(imdb):
             new_width = int(scale_y * background.shape[1])
             scale_x = new_width / background.shape[1]
             background = cv2.resize(background, (new_width, self.gen_height))
-            # if np.random.uniform() > 0.5:
-            #     background = background[:, :background.shape[1]//2, :]
-            # else:
-            #     background = background[:, background.shape[1]//2:, :]
 
             for box in background_boxes:
                 box[0] *= scale_x
@@ -244,14 +248,18 @@ class DetectionsBaseRoidb(imdb):
         roidb_element = self.get_roidb_element(boxes, image_path,
                                                ImageLoader(image_path, image))
 
-        mkdir('./generated')
-        cv2.imwrite(image_path, image)
+        if self._generated_cnt < 1000:
+            mkdir('./generated')
+            timage = image.copy()
+            timage = plot_bboxes(timage, boxes)
+            cv2.imwrite(image_path, timage)
         self._generated_cnt += 1
 
         return roidb_element
 
     def image_path_at(self, i):
         return self._gt_list[self._image_index[i]][0]
+
 
 class RTSDSigns(DetectionsBaseRoidb):
     def __init__(self, dataset_path, mode):
@@ -266,37 +274,42 @@ class RTSDSigns(DetectionsBaseRoidb):
     def gt_base_init(self):
         self._classes = ['__background__', 'sign']
 
-        filter_conditions = [('height', 50, 6000), ('width', 10, 5000),
-                             ('sign_class', r'(?!(.*unknown.*))', None),
-                             ('overlapped', 0, 1), ('score', 0, 0.35)]
+        filter_conditions = [('sign_class', r'(?!(.*unknown.*))', None), # (?!(.*unknown.*))
+                           ('width', 16, 600), ('height', 16, 600),
+                           ('false_positive', 0, 0), ('blurred',0,0,),
+                           ('beyond_borders', 0,0), ('narrow',0,0),
+                           ('badly_visible',0,0), ('overlapped', 0,1)]
 
-        self._gt_base = DetectionsBase(os.path.join(self._dataset_path, self._mode), load_gt=True)
+        self._gt_base = DetectionsBase('/home/local/work/rtsd-frames')
+        self._gt_base.load(self._dataset_path)
         self._gt_base.set_filter_conditions(filter_conditions)
 
-        self._backgrounds = list(self._gt_base.get_backgrounds(pure_backgrounds=True).items())
+        gt_train, gt_test = self._gt_base.get_traintest(keep_ignore=True, train_fraction=0.80)
+        self._backgrounds = list(gt_train.items())
 
-        include_backgrounds = self._mode == 'test'
-        self._gt = self._gt_base.get_gt(keep_ignore=True,
-                                        include_backgrounds=include_backgrounds)
+        if self._mode == 'train':
+            self._gt = gt_train
+        else:
+            self._gt = gt_test
 
         if self._mode == 'train' and cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(self._gt, 80, 6, sratio=1.5)
+            self._positives = extract_positives_gt(self._gt, 80, 5, sratio=1.0)
 
     def sample_jittering(self, sample):
-        return jitter_sample(sample, jittering_angle=6,
+        return jitter_sample(sample, jittering_angle=8,
                                      jittering_contrast=0.2,
                                      jittering_illumination=0.2)
 
     def collect_negatives(self):
-        return collect_random_negatives_from_gt(self._gt, 4000, 200, (80, 120))
+        return collect_random_negatives_from_gt(self._gt, 4000, 200, (80, 80))
 
     def init_params(self):
         self.gen_num_pos = 10
         self.gen_num_neg = int(self.gen_num_pos * 0.8)
-        self.gen_width = 640
-        self.gen_height = 480
-        self.gen_min_height = 50
-        self.gen_max_height = 90
+        self.gen_width = 400
+        self.gen_height = 720
+        self.gen_min_height = 16
+        self.gen_max_height = 72
 
 
 class CaltechPedestrians(DetectionsBaseRoidb):
