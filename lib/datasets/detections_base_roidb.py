@@ -81,7 +81,7 @@ class DetectionsBaseRoidb(imdb):
             stypes, cnt = tuple(map(list, zip(*cnt_by_types)))
             prob = np.array(cnt, dtype=np.float) / np.sum(cnt)
 
-            thresh = 0.4 / len(prob)
+            thresh = 0.1 / len(prob)
             while np.min(prob) < thresh:
                 low_fr = (np.sum(prob < thresh) + 1) / len(prob)
                 prob = redistribute(prob, low_fr, 0.01, 0.01)
@@ -274,18 +274,62 @@ class RTSDSigns(DetectionsBaseRoidb):
     def gt_base_init(self):
         self._classes = ['__background__', 'sign']
 
-        filter_conditions = [('sign_class', r'(?!(.*unknown.*))', None), # (?!(.*unknown.*))
-                           ('width', 16, 600), ('height', 16, 600),
+        filter_conditions = [('sign_class', r'(?!((.*unknown.*)|(6_16|6_8_.*|6_15_3)|(8_.*)))', None), # (?!(.*unknown.*))
+                           ('width', 24, 600), ('height', 24, 600),
                            ('false_positive', 0, 0), ('blurred',0,0,),
                            ('beyond_borders', 0,0), ('narrow',0,0),
                            ('badly_visible',0,0), ('overlapped', 0,1)]
 
-        self._gt_base = DetectionsBase('/home/local/work/rtsd-frames')
-        self._gt_base.load(self._dataset_path)
+        gt_base = DetectionsBase('/home/local/work/rtsd-frames')
+        gt_base.load(self._dataset_path)
+
+        gt_base.merge_object_classes(['1_20', '1_20_2', '1_20_3', '1_21'], '1_20-21')
+        gt_base.merge_object_classes(['1_24', '1_25', '1_26', '1_27', '1_28',
+                                      '1_29', '1_30', '1_31', '1_32', '1_33'], '1_24-33')
+
+        gt_base.merge_object_classes(['2_3_2','2_3_3','2_3_4','2_3_5','2_3_6'], '2_3')
+
+        gt_base.merge_object_classes(['3_3', '3_5', '3_6', '3_7',
+                                      '3_4_1', '3_4_n', '3_4_n2', '3_4_n5', '3_4_n7',
+                                      '3_4_n8'], '3_3-7')
+        gt_base.merge_object_classes(['3_24_n', '3_24_n10', '3_24_n15', '3_24_n30',
+                                      '3_24_n45'], '3_24_n_rare')
+        gt_base.merge_object_classes(['3_25_n', '3_25_n20', '3_25_n40',
+                                      '3_25_n50', '3_25_n70', '3_25_n80'], '3_25')
+        gt_base.merge_object_classes(['3_12_n3', '3_12_n5', '3_12_n6', '3_12_n10',
+                                      '3_13_r', '3_13_r2.5', '3_13_r3', '3_13_r3.3',
+                                      '3_13_r3.5', '3_13_r3.7', '3_13_r3.9', '3_13_r4',
+                                      '3_13_r4.0', '3_13_r4.1', '3_13_r4.2', '3_13_r4.3',
+                                      '3_13_r4.5', '3_13_r5', '3_13_r5.2',
+                                      '3_14_r2.7', '3_14_r3', '3_14_r3.5', '3_14_r3.7',
+                                      '3_16_n', '3_16_n1', '3_16_n3'], '3_12_13_14_16')
+        gt_base.merge_object_classes(['3_11_n5', '3_11_n8','3_11_n9','3_11_n13',
+                                      '3_11_n17','3_11_n20','3_11_n23'], '3_11')
+
+        gt_base.merge_object_classes(['4_1_2_1', '4_1_2_2'], '4_1_2_12')
+        gt_base.merge_object_classes(['4_1_2', '4_1_3'], '4_1_23')
+        gt_base.merge_object_classes(['4_1_4', '4_1_5'], '4_1_45')
+        gt_base.merge_object_classes(['4_2_1', '4_2_2'], '4_2_12')
+        gt_base.merge_object_classes(['4_3', '4_4', '4_5'], '4_345')
+        gt_base.merge_object_classes(['4_8_1', '4_8_2', '4_8_3'], '4_8')
+
+        gt_base.merge_object_classes(['5_21', '5_22'], '5_2(1|2)')
+        gt_base.merge_object_classes(['5_3', '5_4'], '5_(3|4)')
+        gt_base.merge_object_classes(['5_16', '5_17', '5_18'], '5_16_17_18')
+        gt_base.merge_object_classes(['5_11', '5_12'], '5_11_12')
+
+        gt_base.merge_object_classes(['6_2_n20', '6_2_n40', '6_2_n50', '6_2_n60',
+                                      '6_2_n70'], '6_2_n')
+        gt_base.merge_object_classes(['6_15_1', '6_15_2'], '6_15')
+
+        gt_base.merge_object_classes(['7_11', '7_12', '7_13', '7_14', '7_15', '7_18',
+                                      '7_1', '7_2', '7_3', '7_4', '7_5', '7_6', '7_7'], '7_all')
+
+        self._gt_base = gt_base
         self._gt_base.set_filter_conditions(filter_conditions)
 
         gt_train, gt_test = self._gt_base.get_traintest(keep_ignore=True, train_fraction=0.80)
-        self._backgrounds = list(gt_train.items())
+        self._backgrounds = list(self._gt_base.get_backgrounds(pure_backgrounds=True).items())
 
         if self._mode == 'train':
             self._gt = gt_train
@@ -293,7 +337,7 @@ class RTSDSigns(DetectionsBaseRoidb):
             self._gt = gt_test
 
         if self._mode == 'train' and cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(self._gt, 80, 5, sratio=1.0)
+            self._positives = extract_positives_gt(self._gt, 96, 5, sratio=1.0)
 
     def sample_jittering(self, sample):
         return jitter_sample(sample, jittering_angle=8,
@@ -301,7 +345,7 @@ class RTSDSigns(DetectionsBaseRoidb):
                                      jittering_illumination=0.2)
 
     def collect_negatives(self):
-        return collect_random_negatives_from_gt(self._gt, 4000, 200, (80, 80))
+        return collect_random_negatives_from_gt(self._gt, 4000, 200, (96, 96))
 
     def init_params(self):
         self.gen_num_pos = 10
