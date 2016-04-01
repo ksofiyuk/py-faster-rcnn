@@ -54,6 +54,7 @@ class AnchorTargetLayer(caffe.Layer):
         layer_params = yaml.load(self.param_str_)
         self._feat_stride = layer_params['feat_stride']
         self._iters = 0
+        self._periodic_tn_enabled = True
 
         # allow boxes to sit over the edge by a small amount
         self._allowed_border = layer_params.get('allowed_border', 0)
@@ -209,12 +210,24 @@ class AnchorTargetLayer(caffe.Layer):
         else:
             self._top_neg_fraction = cfg.TRAIN.RPN_TOP_NEGATIVE_FRACTION
 
+        if cfg.TRAIN.RPN_PERIODIC_TN > 0 and self._iters % cfg.TRAIN.RPN_PERIODIC_TN == 0:
+            self._periodic_tn_enabled = not self._periodic_tn_enabled
+            if self._periodic_tn_enabled:
+                print('Switch on top negatives with fraction %.6f' % self._top_neg_fraction)
+            else:
+                print('Switch off top negatives')
+
+        if not self._periodic_tn_enabled:
+            self._top_neg_fraction = 0
+
+        if self._iters % 250 == 0:
+            print('Current TNF: %.6f' % self._top_neg_fraction)
+
         # subsample negative labels if we have too many
         # num_bg = max(num_fg, cfg.TRAIN.RPN_BATCHSIZE - num_fg)
         num_bg = cfg.TRAIN.RPN_BATCHSIZE - np.sum(labels == 1)
         bg_inds = np.where(labels == 0)[0]
         if len(bg_inds) > num_bg:
-            # print(self._top_neg_fraction)
             keep_first = np.floor(num_bg * self._top_neg_fraction)
 
             if keep_first > 0:
