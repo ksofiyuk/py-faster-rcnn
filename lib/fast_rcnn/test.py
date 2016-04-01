@@ -22,7 +22,7 @@ import os
 import re
 
 
-def _get_image_blob(im):
+def _get_image_blob(im, target_size):
     """Converts an image into a network input.
 
     Arguments:
@@ -43,15 +43,14 @@ def _get_image_blob(im):
     processed_ims = []
     im_scale_factors = []
 
-    for target_size in cfg.TEST.SCALES:
-        im_scale = float(target_size) / float(im_size_min)
-        # Prevent the biggest axis from being more than MAX_SIZE
-        if np.round(im_scale * im_size_max) > cfg.TEST.MAX_SIZE:
-            im_scale = float(cfg.TEST.MAX_SIZE) / float(im_size_max)
-        im = cv2.resize(im_orig, None, None, fx=im_scale, fy=im_scale,
-                        interpolation=cv2.INTER_LINEAR)
-        im_scale_factors.append(im_scale)
-        processed_ims.append(im)
+    im_scale = float(target_size) / float(im_size_min)
+    # Prevent the biggest axis from being more than MAX_SIZE
+    if np.round(im_scale * im_size_max) > cfg.TEST.MAX_SIZE:
+        im_scale = float(cfg.TEST.MAX_SIZE) / float(im_size_max)
+    im = cv2.resize(im_orig, None, None, fx=im_scale, fy=im_scale,
+                    interpolation=cv2.INTER_LINEAR)
+    im_scale_factors.append(im_scale)
+    processed_ims.append(im)
 
     # Create a blob to hold the input images
     blob = im_list_to_blob(processed_ims)
@@ -103,16 +102,16 @@ def _project_im_rois(im_rois, scales):
     return rois, levels
 
 
-def _get_blobs(im, rois):
+def _get_blobs(im, target_size, rois):
     """Convert an image and RoIs within that image into network inputs."""
     blobs = {'data' : None, 'rois' : None}
-    blobs['data'], im_scale_factors = _get_image_blob(im)
+    blobs['data'], im_scale_factors = _get_image_blob(im, target_size)
     if not cfg.TEST.HAS_RPN:
         blobs['rois'] = _get_rois_blob(rois, im_scale_factors)
     return blobs, im_scale_factors
 
 
-def im_detect(net, im, boxes=None):
+def im_detect(net, im, target_size, boxes=None):
     """Detect object classes in an image given object proposals.
 
     Arguments:
@@ -125,7 +124,7 @@ def im_detect(net, im, boxes=None):
             background as object category 0)
         boxes (ndarray): R x (4*K) array of predicted bounding boxes
     """
-    blobs, im_scales = _get_blobs(im, boxes)
+    blobs, im_scales = _get_blobs(im, target_size, boxes)
 
     # When mapping from image ROIs to feature map ROIs, there's some aliasing
     # (some distinct image ROIs get mapped to the same feature ROI).
@@ -294,7 +293,16 @@ def test_net(net, imdb):
 
         im = cv2.imread(image_path)
         _t['im_detect'].tic()
-        scores, boxes = im_detect(net, im, box_proposals)
+
+        scores, boxes = None, None
+        for target_size in cfg.TEST.SCALES:
+            tscores, tboxes = im_detect(net, im, target_size, box_proposals)
+            if scores is not None:
+                scores = np.vstack((scores, tscores))
+                boxes = np.vstack((boxes, tboxes))
+            else:
+                scores, boxes = tscores, tboxes
+
         _t['im_detect'].toc()
 
         _t['misc'].tic()
