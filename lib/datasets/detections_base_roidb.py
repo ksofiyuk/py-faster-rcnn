@@ -391,6 +391,47 @@ class TownCenterPedestrians(DetectionsBaseRoidb):
         self.gen_max_height = 100
 
 
+class FacesDataset(DetectionsBaseRoidb):
+    def __init__(self, dataset_path):
+        self._dataset_path = dataset_path
+
+        dataset_name = osp.basename(dataset_path)
+        super(FacesDataset, self).__init__(dataset_name)
+
+    def gt_base_init(self):
+        self._classes = ['__background__', 'face']
+
+        imgs_dir = osp.join(self._dataset_path, 'imgs')
+        gt_path = osp.join(self._dataset_path, 'gt.pickle')
+        self._gt_base = DetectionsBase(images_directory=imgs_dir)
+        self._gt_base.load(gt_path)
+
+        filter_conditions = [('sign_class', 'face', None)]
+        self._gt_base.set_filter_conditions(filter_conditions)
+
+        self._gt = self._gt_base.get_gt(keep_ignore=True,
+                                        include_backgrounds=False)
+
+        if cfg.TRAIN.GENERATED_FRACTION > 0:
+            self._positives = extract_positives_gt(self._gt, 96, 3, sratio=1.0)
+
+    def init_params(self):
+        self.gen_num_pos = 5
+        self.gen_num_neg = 4
+        self.gen_width = 700
+        self.gen_height = 500
+        self.gen_min_height = 40
+        self.gen_max_height = 200
+
+    def sample_jittering(self, sample):
+        return jitter_sample(sample, jittering_angle=6,
+                                     jittering_contrast=0.2,
+                                     jittering_illumination=0.2)
+
+    def collect_negatives(self):
+        return collect_random_negatives_from_gt(self._gt, 4000, 200, (96, 96))
+
+
 def combine_horizontal(samples, out_width):
     line_height = max(i.shape[0] for i, b in samples)
     sum_width = sum(i.shape[1] for i, b in samples)
