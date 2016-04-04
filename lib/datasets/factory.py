@@ -44,10 +44,23 @@ __sets['towncenter_test'] = lambda: TownCenterPedestrians('/home/local/work/data
 __sets['rtsd_train'] = lambda: RTSDSigns('/home/local/work/rtsd_signs/gt/gt_base_all.pickle', 'train')
 __sets['rtsd_test'] = lambda: RTSDSigns('/home/local/work/rtsd_signs/gt/gt_base_all.pickle', 'test')
 
-__sets['faces_aflw'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_p3lr11')
+__sets['faces_aflw_train'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_p3lr11', 'train')
+__sets['faces_aflw_test'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_p3lr11', 'test')
+
+__sets['faces_fddb_train'] = lambda: FacesDataset('/home/local/work/data/faces/FDDB/FDDB_p3lr11', 'train')
+__sets['faces_fddb_test'] = lambda: FacesDataset('/home/local/work/data/faces/FDDB/FDDB_p3lr11', 'test')
+
+__sets['faces_afw_train'] = lambda: FacesDataset('/home/local/work/data/faces/AFW/AFW_p3lr11', 'train')
+__sets['faces_afw_test'] = lambda: FacesDataset('/home/local/work/data/faces/AFW/AFW_p3lr11', 'test')
+
+__sets['faces_ijbai_train'] = lambda: FacesDataset('/home/local/work/data/faces/IJBAI_p3lr11', 'train')
+__sets['faces_ijbai_test'] = lambda: FacesDataset('/home/local/work/data/faces/IJBAI_p3lr11', 'test')
+
+__sets['faces_bstest_train'] = lambda: FacesDataset('/home/local/work/data/faces/BSTest_p3lr11', 'train')
+__sets['faces_bstest_test'] = lambda: FacesDataset('/home/local/work/data/faces/BSTest_p3lr11', 'test')
 
 # Set up voc_<year>_<split>_top_<k> using selective search "quality" mode
-# but only returning the first k boxes
+# but only returning the first k boxesIJBAI
 for top_k in np.arange(1000, 11000, 1000):
     for year in ['2007', '2012']:
         for split in ['train', 'val', 'trainval', 'test']:

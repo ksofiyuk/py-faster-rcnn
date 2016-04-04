@@ -71,8 +71,10 @@ class DetectionsBaseRoidb(imdb):
             else:
                 self._pos_types_indxs = self._pos_lmdb.get_value('_pos_types_indxs')
             self._pos_lmdb.commit()
+            self._num_positives = sum(len(x) for key, x in self._pos_types_indxs.items())
         else:
             self._positives = list(self._positives)
+            self._num_positives = len(self._positives)
             for i, (_, boxes) in enumerate(self._positives):
                 self._pos_types_indxs[boxes[0][5]].append(i)
 
@@ -84,7 +86,7 @@ class DetectionsBaseRoidb(imdb):
             thresh = 0.1 / len(prob)
             while np.min(prob) < thresh:
                 low_fr = (np.sum(prob < thresh) + 1) / len(prob)
-                prob = redistribute(prob, low_fr, 0.01, 0.01)
+                prob = redistribute(prob, low_fr, 0.05, 0.01)
 
             self._pos_prob = prob
             self._pos_types = stypes
@@ -176,7 +178,7 @@ class DetectionsBaseRoidb(imdb):
             for stype in samples_types:
                 samples_indx.append(random.choice(self._pos_types_indxs[stype]))
         else:
-            samples_indx = random.sample(range(len(self._positives)), num_pos)
+            samples_indx = random.sample(range(self._num_positives), num_pos)
 
         if cfg.TRAIN.USE_LMDB:
             samples = [self._pos_lmdb.get_value(str(i)) for i in samples_indx]
@@ -203,29 +205,43 @@ class DetectionsBaseRoidb(imdb):
                                 for sample in samples[num_pos:]]
         random.shuffle(samples)
 
-        background_path, background_boxes = random.choice(self._backgrounds)
+        if self._backgrounds is not None:
+            background_path, background_boxes = random.choice(self._backgrounds)
 
-        background = cv2.imread(background_path)
-        if background.shape[1] > self.gen_width:
-            background = background[:, :self.gen_width, :]
+            background = cv2.imread(background_path)
+            if background.shape[1] > self.gen_width:
+                background = background[:, :self.gen_width, :]
 
-        scale_x = self.gen_width / background.shape[1]
-        scale_y = self.gen_height / background.shape[0]
-        background = cv2.resize(background, (self.gen_width, self.gen_height))
+            scale_x = self.gen_width / background.shape[1]
+            scale_y = self.gen_height / background.shape[0]
+            background = cv2.resize(background, (self.gen_width, self.gen_height))
 
-        image, boxes, inserted_boxes = combine_samples(samples, self.gen_width, self.gen_height, background)
+            image, boxes, inserted_boxes = combine_samples(samples, self.gen_width, self.gen_height, background)
 
-        for box in background_boxes:
-            if box[0] + box[2] * 0.5 > self.gen_width:
-                continue
+            for box in background_boxes:
+                if box[0] + box[2] * 0.5 > self.gen_width:
+                    continue
 
-            box[0] *= scale_x
-            box[1] *= scale_y
-            box[2] *= scale_x
-            box[3] *= scale_y
-            iou = get_max_iou(box, inserted_boxes)
-            if iou < 0.05:
-                boxes.append(box)
+                box[0] *= scale_x
+                box[1] *= scale_y
+                box[2] *= scale_x
+                box[3] *= scale_y
+                iou = get_max_iou(box, inserted_boxes)
+                if iou < 0.05:
+                    boxes.append(box)
+        else:
+            sample_path, sample_boxes = random.choice(self._gt_list)
+            sample_image = cv2.imread(sample_path)
+
+            background = np.full((sample_image.shape[0], self.gen_width, 3), 128, dtype=sample_image.dtype)
+            image, boxes, inserted_boxes = combine_samples(samples, self.gen_width, sample_image.shape[0], background)
+
+            for box in sample_boxes:
+                box[0] += self.gen_width
+
+            image = np.hstack((image, sample_image))
+            boxes += sample_boxes
+
 
         if cfg.TRAIN.DOUBLE_GENERATE:
             background_path, background_boxes = random.choice(self._backgrounds)
@@ -337,7 +353,7 @@ class RTSDSigns(DetectionsBaseRoidb):
             self._gt = gt_test
 
         if self._mode == 'train' and cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(self._gt, 96, 5, sratio=1.0)
+            self._positives = extract_positives_gt(self._gt, 96, 5, sratio=1.5)
 
     def sample_jittering(self, sample):
         return jitter_sample(sample, jittering_angle=8,
@@ -345,12 +361,13 @@ class RTSDSigns(DetectionsBaseRoidb):
                                      jittering_illumination=0.2)
 
     def collect_negatives(self):
-        return collect_random_negatives_from_gt(self._gt, 4000, 200, (96, 96))
+        return collect_random_negatives_from_gt(self._gt_base.get_backgrounds(pure_backgrounds=True),
+                                                4000, 200, (96, 144))
 
     def init_params(self):
-        self.gen_num_pos = 10
-        self.gen_num_neg = int(self.gen_num_pos * 0.8)
-        self.gen_width = 400
+        self.gen_num_pos = 20
+        self.gen_num_neg = 6
+        self.gen_width = 500
         self.gen_height = 720
         self.gen_min_height = 16
         self.gen_max_height = 72
@@ -436,8 +453,9 @@ class TownCenterPedestrians(DetectionsBaseRoidb):
 
 
 class FacesDataset(DetectionsBaseRoidb):
-    def __init__(self, dataset_path):
+    def __init__(self, dataset_path, mode):
         self._dataset_path = dataset_path
+        self._mode = mode
 
         dataset_name = osp.basename(dataset_path)
         super(FacesDataset, self).__init__(dataset_name)
@@ -454,17 +472,18 @@ class FacesDataset(DetectionsBaseRoidb):
         self._gt_base.set_filter_conditions(filter_conditions)
 
         self._gt = self._gt_base.get_gt(keep_ignore=True,
-                                        include_backgrounds=False)
+                                        include_backgrounds=(self._mode == 'test'))
+        self._backgrounds = None
 
         if cfg.TRAIN.GENERATED_FRACTION > 0:
-            self._positives = extract_positives_gt(self._gt, 96, 3, sratio=1.0)
+            self._positives = extract_positives_gt(self._gt, 128, 3, sratio=1.0)
 
     def init_params(self):
-        self.gen_num_pos = 5
-        self.gen_num_neg = 4
-        self.gen_width = 700
+        self.gen_num_pos = 10
+        self.gen_num_neg = 5
+        self.gen_width = 400
         self.gen_height = 500
-        self.gen_min_height = 40
+        self.gen_min_height = 64
         self.gen_max_height = 200
 
     def sample_jittering(self, sample):
@@ -473,7 +492,7 @@ class FacesDataset(DetectionsBaseRoidb):
                                      jittering_illumination=0.2)
 
     def collect_negatives(self):
-        return collect_random_negatives_from_gt(self._gt, 4000, 200, (96, 96))
+        return collect_random_negatives_from_gt(self._gt, 4000, 200, (128, 128))
 
 
 def combine_horizontal(samples, out_width):
@@ -495,7 +514,7 @@ def combine_horizontal(samples, out_width):
 
 def combine_samples(samples, out_width, out_height, background=None):
     heights = [i.shape[0] for i, b in samples]
-    order = np.argsort(heights)[::-1]
+    order = list(range(len(heights)))#np.argsort(heights)[::-1]
 
     horizontal_boxes = []
     line_boxes = []
@@ -506,6 +525,9 @@ def combine_samples(samples, out_width, out_height, background=None):
     for indx in order:
         width = samples[indx][0].shape[1]
         height = samples[indx][0].shape[0]
+
+        if width > out_width:
+            continue
 
         if total_height + max_height > out_height:
             break

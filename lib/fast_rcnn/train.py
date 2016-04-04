@@ -52,6 +52,7 @@ class SolverWrapper(object):
             pb2.text_format.Merge(f.read(), self.solver_param)
 
         self.solver.net.layers[0].set_roidb(roidb)
+        self.solver.net.layers[0].net = self.solver.net
 
     def snapshot(self):
         """Take a snapshot of the network after unnormalizing the learned
@@ -113,10 +114,8 @@ class SolverWrapper(object):
                 last_snapshot_iter = self.solver.iter
                 model_paths.append(self.snapshot())
 
-            bbox_loss = self.solver.net.blobs['rpn_loss_bbox'].data.copy()
-            cls_loss = self.solver.net.blobs['rpn_cls_loss'].data.copy()
-            image_path = self.solver.net.layers[0]._forward_image
-            iters_info.append((image_path, cls_loss, bbox_loss))
+            iters_losses = self.solver.net.layers[0].get_losses()
+            iters_info += iters_losses
 
             if self.solver.iter % 100 == 0:
                 if not os.path.exists(self.output_dir):

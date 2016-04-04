@@ -87,7 +87,8 @@ class RoIDataLayer(caffe.Layer):
         self._num_classes = layer_params['num_classes']
 
         self._name_to_top_map = {}
-        self._forward_image = None
+        self._forward_images = []
+        self._losses = []
         self._blobs = None
 
         # data blob: holds a batch of N images, each with 3 channels
@@ -142,10 +143,27 @@ class RoIDataLayer(caffe.Layer):
     def next_blob(self):
         pass
 
+    def get_losses(self):
+        iters_count = len(self._forward_images)
+
+        losses = self._losses[-iters_count+1:] + [self.get_last_loss()]
+        ret = list(zip(self._forward_images, losses))
+
+        self._forward_images = []
+        self._losses = []
+        return ret
+
+    def get_last_loss(self):
+        bbox_loss = float(self.net.blobs['rpn_loss_bbox'].data.copy())
+        cls_loss = float(self.net.blobs['rpn_cls_loss'].data.copy())
+        return (cls_loss, bbox_loss)
+
     def forward(self, bottom, top):
         """Get blobs and copy them into this layer's top blob vector."""
         self._blobs, im_path = self._get_next_minibatch()
-        self._forward_image = im_path
+        self._forward_images.append(im_path)
+
+        self._losses.append(self.get_last_loss())
 
         for blob_name, blob in self._blobs.items():
             top_ind = self._name_to_top_map[blob_name]

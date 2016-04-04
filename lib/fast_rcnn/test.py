@@ -295,7 +295,13 @@ def test_net(net, imdb):
         _t['im_detect'].tic()
 
         scores, boxes = None, None
+        if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < max(cfg.TEST.SCALES):
+            target_size = np.min(im.shape[:2])
+            scores, boxes = im_detect(net, im, target_size, box_proposals)
+
         for target_size in cfg.TEST.SCALES:
+            if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < target_size:
+                continue
             tscores, tboxes = im_detect(net, im, target_size, box_proposals)
             if scores is not None:
                 scores = np.vstack((scores, tscores))
