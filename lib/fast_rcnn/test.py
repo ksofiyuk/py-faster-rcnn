@@ -111,7 +111,7 @@ def _get_blobs(im, target_size, rois):
     return blobs, im_scale_factors
 
 
-def im_detect(net, im, target_size, boxes=None):
+def fixed_scale_detect(net, im, target_size, boxes=None):
     """Detect object classes in an image given object proposals.
 
     Arguments:
@@ -247,6 +247,68 @@ def apply_nms(all_boxes, thresh):
     return nms_boxes
 
 
+def im_detect(net, im, box_proposals):
+    max_target_size = max(cfg.TEST.SCALES)
+    from visual_utils import plot_bboxes
+
+    scores, boxes = None, None
+    if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < max_target_size:
+        target_size = np.min(im.shape[:2])
+        scores, boxes = fixed_scale_detect(net, im, target_size, box_proposals)
+
+    elif cfg.TEST.DENSE_SCAN and np.min(im.shape[:2]) > 1.5 * max_target_size:
+        max_size = min(cfg.TEST.MAX_SIZE, np.max(im.shape[:2]))
+
+        if im.shape[0] > im.shape[1]:
+            block_h, block_w = max_size, max_target_size
+        else:
+            block_h, block_w = max_target_size, max_size
+
+        shift_h = int(block_h * 0.85)
+        shift_w = int(block_w * 0.85)
+
+        print(im.shape, shift_h, shift_w)
+        cur_x, cur_y = 0, 0
+        while cur_y < im.shape[0]:
+            cur_x = 0
+
+            while cur_x < im.shape[1]:
+                end_x = min(im.shape[1], cur_x + block_w)
+                end_y = min(im.shape[0], cur_y + block_h)
+                start_x = end_x - block_w
+                start_y = end_y - block_h
+
+                print(start_y, end_y, start_x, end_x)
+                sub_im = im[start_y:end_y, start_x:end_x, :]
+                tscores, tboxes = fixed_scale_detect(net, sub_im, max_target_size, box_proposals)
+
+                tboxes[:, 4] += start_x
+                tboxes[:, 6] += start_x
+                tboxes[:, 5] += start_y
+                tboxes[:, 7] += start_y
+
+                if scores is not None:
+                    scores = np.vstack((scores, tscores))
+                    boxes = np.vstack((boxes, tboxes))
+                else:
+                    scores, boxes = tscores, tboxes
+
+                cur_x += shift_w
+            cur_y += shift_h
+
+    for target_size in cfg.TEST.SCALES:
+        if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < target_size:
+            continue
+        tscores, tboxes = fixed_scale_detect(net, im, target_size, box_proposals)
+        if scores is not None:
+            scores = np.vstack((scores, tscores))
+            boxes = np.vstack((boxes, tboxes))
+        else:
+            scores, boxes = tscores, tboxes
+
+    return scores, boxes
+
+
 def test_net(net, imdb):
     """Test a Fast R-CNN network on an image database."""
     num_images = len(imdb.image_index)
@@ -294,20 +356,7 @@ def test_net(net, imdb):
         im = cv2.imread(image_path)
         _t['im_detect'].tic()
 
-        scores, boxes = None, None
-        if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < max(cfg.TEST.SCALES):
-            target_size = np.min(im.shape[:2])
-            scores, boxes = im_detect(net, im, target_size, box_proposals)
-
-        for target_size in cfg.TEST.SCALES:
-            if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < target_size:
-                continue
-            tscores, tboxes = im_detect(net, im, target_size, box_proposals)
-            if scores is not None:
-                scores = np.vstack((scores, tscores))
-                boxes = np.vstack((boxes, tboxes))
-            else:
-                scores, boxes = tscores, tboxes
+        scores, boxes = im_detect(net, im, box_proposals)
 
         _t['im_detect'].toc()
 
