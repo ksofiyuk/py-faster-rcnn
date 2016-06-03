@@ -15,6 +15,7 @@ from .generate_anchors import generate_anchors
 from utils.cython_bbox import bbox_overlaps
 from fast_rcnn.nms_wrapper import nms
 
+
 DEBUG = False
 
 class ProposalTargetLayer(caffe.Layer):
@@ -52,6 +53,7 @@ class ProposalTargetLayer(caffe.Layer):
         top[4].reshape(1, self._num_classes * 4)
 
     def forward(self, bottom, top):
+
         # Proposal ROIs (0, x1, y1, x2, y2) coming from RPN
         # (i.e., rpn.proposal_layer.ProposalLayer), or any other source
         all_rois = bottom[0].data
@@ -109,6 +111,7 @@ class ProposalTargetLayer(caffe.Layer):
         # bbox_outside_weights
         top[4].reshape(*bbox_inside_weights.shape)
         top[4].data[...] = np.array(bbox_inside_weights > 0).astype(np.float32)
+
 
     def backward(self, top, propagate_down, bottom):
         """This layer does not propagate gradients."""

@@ -28,6 +28,11 @@ class SolverWrapper(object):
                  pretrained_model=None):
         """Initialize the SolverWrapper."""
         self.output_dir = output_dir
+        self._score_std = 0
+        self._score_mean = 0
+        self._so_force_iter = 0
+        self._so_force_mode = False
+        self._so_bad_samples = set()
 
         if (cfg.TRAIN.HAS_RPN and cfg.TRAIN.BBOX_REG and
             cfg.TRAIN.BBOX_NORMALIZE_TARGETS):
@@ -51,8 +56,9 @@ class SolverWrapper(object):
         with open(solver_prototxt, 'rt') as f:
             pb2.text_format.Merge(f.read(), self.solver_param)
 
-        self.solver.net.layers[0].set_roidb(roidb)
-        self.solver.net.layers[0].net = self.solver.net
+        self._data_layer = self.solver.net.layers[0]
+        self._data_layer.set_roidb(roidb)
+        self._data_layer.net = self.solver.net
 
     def snapshot(self):
         """Take a snapshot of the network after unnormalizing the learned
@@ -115,7 +121,8 @@ class SolverWrapper(object):
                 model_paths.append(self.snapshot())
 
             iters_losses = self.solver.net.layers[0].get_losses()
-            iters_info += iters_losses
+            if not self._so_force_mode:
+                iters_info += iters_losses
 
             if self.solver.iter % 100 == 0:
                 if not os.path.exists(self.output_dir):
@@ -123,6 +130,39 @@ class SolverWrapper(object):
                 save_path = os.path.join(self.output_dir, 'iters_info.pickle')
                 with open(save_path, 'wb') as f:
                     pickle.dump(iters_info, f)
+
+            if cfg.TRAIN.ENABLE_SMART_ORDER:
+                tail_len = cfg.TRAIN.SO_TAIL_LEN
+                cls_scores = np.array([x[1][0] for x in iters_info])
+                self._score_std = np.std(cls_scores[-tail_len:])
+                self._score_mean = np.mean(cls_scores[-tail_len:])
+
+                if not self._so_force_mode:
+                    # if len(iters_losses) >= tail_len:
+                    for sample, (cls_loss, bbox_loss) in iters_losses:
+                        if cls_loss > self._score_mean + 1 * self._score_std:
+                            self._so_bad_samples.add(sample)
+
+                    self._data_layer.update_roidb_losses(iters_losses)
+                    self._data_layer._score_mean = self._score_mean
+
+                    if len(self._so_bad_samples) > cfg.TRAIN.SO_FORCE_BATCHSIZE:
+                        self._so_force_mode = True
+                        self._so_force_iter = 0
+                        self._data_layer.enable_force_mode(self._so_bad_samples)
+
+                    if self.solver.iter % 100 == 0:
+                        print('bad sample cnt', len(self._so_bad_samples),
+                                                self._score_mean, self._score_std)
+                else:
+                    self._so_force_iter += len(iters_losses)
+
+                    max_force_iter = len(self._so_bad_samples) * cfg.TRAIN.SO_FORCE_ROUNDS
+                    if self._so_force_iter > max_force_iter:
+                        self._so_force_mode = False
+                        self._so_bad_samples = set()
+                        self._data_layer.disable_force_mode()
+
 
         if last_snapshot_iter != self.solver.iter:
             model_paths.append(self.snapshot())

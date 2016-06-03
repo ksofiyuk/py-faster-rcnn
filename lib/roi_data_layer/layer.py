@@ -11,6 +11,7 @@ RoIDataLayer implements a Caffe Python layer.
 """
 
 import caffe
+import random
 from fast_rcnn.config import cfg
 from roi_data_layer.minibatch import get_minibatch
 import numpy as np
@@ -26,6 +27,55 @@ class RoIDataLayer(caffe.Layer):
         self._perm = np.random.permutation(np.arange(len(self._roidb)))
         self._cur = 0
 
+    def _get_next_normal_minibatch(self):
+        minibatch_db = []
+        while len(minibatch_db) < cfg.TRAIN.IMS_PER_BATCH:
+            if self._cur >= len(self._roidb):
+                self._shuffle_roidb_inds()
+
+            if np.random.uniform() < cfg.TRAIN.GENERATED_FRACTION:
+                minibatch_db.append(self._imdb.generate_frame())
+                continue
+
+            inds = self._perm[self._cur]
+            self._cur += 1
+
+            if self._roidb[inds]['background']:
+                x = np.random.uniform()
+                if x > cfg.TRAIN.BG_PROB:
+                    continue
+
+            if cfg.TRAIN.USE_FLIPPED:
+                self._roidb[inds]['flipped'] = np.random.randint(0, 2)
+
+            if cfg.TRAIN.ENABLE_SMART_ORDER:
+                sample = (self._roidb[inds]['image'], self._roidb[inds]['flipped'])
+                loss = self._roidb_losses.get(sample, 1e6)
+
+                if loss < 0.5 * self._score_mean and \
+                         np.random.uniform() < cfg.TRAIN.SO_GOOD_SKIP_PROB:
+                    # print('Skipped', sample, 'last loss', loss, 'mean loss', self._score_mean)
+                    continue
+
+            minibatch_db.append(self._roidb[inds])
+
+        return minibatch_db
+
+    def _get_next_force_minibatch(self):
+        minibatch_db = []
+        while len(minibatch_db) < cfg.TRAIN.IMS_PER_BATCH:
+            if self._force_cur >= len(self._force_inds):
+                self._force_cur = 0
+                random.shuffle(self._force_inds)
+
+            inds, is_flipped = self._force_inds[self._force_cur]
+            self._force_cur += 1
+
+            self._roidb[inds]['flipped'] = is_flipped
+            minibatch_db.append(self._roidb[inds])
+
+        return minibatch_db
+
     def _get_next_minibatch(self):
         """Return the blobs to be used for the next minibatch.
 
@@ -36,28 +86,28 @@ class RoIDataLayer(caffe.Layer):
             assert False, "not implemented"
             return self._blob_queue.get()
         else:
-            minibatch_db = []
-            while len(minibatch_db) < cfg.TRAIN.IMS_PER_BATCH:
-                if self._cur >= len(self._roidb):
-                    self._shuffle_roidb_inds()
-
-                if np.random.uniform() < cfg.TRAIN.GENERATED_FRACTION:
-                    minibatch_db.append(self._imdb.generate_frame())
-                    continue
-
-                inds = self._perm[self._cur]
-                self._cur += 1
-
-                if self._roidb[inds]['background']:
-                    x = np.random.uniform()
-                    if x > cfg.TRAIN.BG_PROB:
-                        continue
-
-                if cfg.TRAIN.USE_FLIPPED:
-                    self._roidb[inds]['flipped'] = np.random.randint(0, 2)
-                minibatch_db.append(self._roidb[inds])
+            if self._force_mode:
+                minibatch_db = self._get_next_force_minibatch()
+            else:
+                minibatch_db = self._get_next_normal_minibatch()
 
             return get_minibatch(minibatch_db, self._num_classes)
+
+    def enable_force_mode(self, force_samples):
+        force_samples = {path: flipped for path, flipped in list(force_samples)}
+
+        self._force_cur = 0
+        self._force_inds = []
+        self._force_mode = True
+
+        for indx, record in enumerate(self._roidb):
+            flipped = force_samples.get(record['image'], None)
+            if flipped is not None:
+                self._force_inds.append((indx, flipped))
+        print('Force mode was enabled with %d samples' % len(self._force_inds))
+
+    def disable_force_mode(self):
+        self._force_mode = False
 
     def set_roidb(self, imdb):
         """Set the roidb to be used by this layer during training."""
@@ -90,6 +140,11 @@ class RoIDataLayer(caffe.Layer):
         self._forward_images = []
         self._losses = []
         self._blobs = None
+        self._roidb_losses = {}
+        self._score_mean = 0
+        self._force_mode = False
+        self._force_inds = []
+        self._force_cur = 0
 
         # data blob: holds a batch of N images, each with 3 channels
         idx = 0
@@ -157,6 +212,10 @@ class RoIDataLayer(caffe.Layer):
         bbox_loss = float(self.net.blobs['rpn_loss_bbox'].data.copy())
         cls_loss = float(self.net.blobs['rpn_cls_loss'].data.copy())
         return (cls_loss, bbox_loss)
+
+    def update_roidb_losses(self, loss_data):
+        for sample, losses in loss_data:
+            self._roidb_losses[sample] = losses[0]
 
     def forward(self, bottom, top):
         """Get blobs and copy them into this layer's top blob vector."""

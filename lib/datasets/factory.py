@@ -47,6 +47,9 @@ __sets['rtsd_test'] = lambda: RTSDSigns('/home/local/work/rtsd_signs/gt/gt_base_
 __sets['faces_aflw_train'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_p3lr11', 'train')
 __sets['faces_aflw_test'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_p3lr11', 'test')
 
+__sets['faces_aflw_fixed_train'] = lambda: FacesDataset('/home/local/work/data/faces/AFLWfixed_p3lr11', 'train')
+__sets['faces_aflw_fixed_test'] = lambda: FacesDataset('/home/local/work/data/faces/AFLWfixed_p3lr11', 'test')
+
 __sets['faces_fddb_train'] = lambda: FacesDataset('/home/local/work/data/faces/FDDB/FDDB_p3lr11', 'train')
 __sets['faces_fddb_test'] = lambda: FacesDataset('/home/local/work/data/faces/FDDB/FDDB_p3lr11', 'test')
 
@@ -58,6 +61,35 @@ __sets['faces_ijbai_test'] = lambda: FacesDataset('/home/local/work/data/faces/I
 
 __sets['faces_bstest_train'] = lambda: FacesDataset('/home/local/work/data/faces/BSTest_p3lr11', 'train')
 __sets['faces_bstest_test'] = lambda: FacesDataset('/home/local/work/data/faces/BSTest_p3lr11', 'test')
+
+__sets['faces_bsfntest_train'] = lambda: FacesDataset('/home/local/work/data/faces/BigSampleFNTest_p3lr11', 'train')
+__sets['faces_bsfntest_test'] = lambda: FacesDataset('/home/local/work/data/faces/BigSampleFNTest_p3lr11', 'test')
+
+__sets['faces_bsfntrain_train'] = lambda: FacesDataset('/home/local/work/data/faces/BigSampleFNTrain_p3lr11', 'train')
+__sets['faces_bsfntrain_test'] = lambda: FacesDataset('/home/local/work/data/faces/BigSampleFNTrain_p3lr11', 'test')
+
+__sets['faces_yfs_train'] = lambda: FacesDataset('/home/local/work/data/faces/YFS/YFS_p3lr11', 'train')
+__sets['faces_yfs_test'] = lambda: FacesDataset('/home/local/work/data/faces/YFS/YFS_p3lr11', 'test')
+
+__sets['faces_videoset_train'] = lambda: FacesDataset('/home/local/work/data/faces/VideoSet1/VideoSet1_p3lr11', 'train')
+__sets['faces_videoset_test'] = lambda: FacesDataset('/home/local/work/data/faces/VideoSet1/VideoSet1_p3lr11', 'test')
+
+__sets['faces_itv_train'] = lambda: FacesDataset('/home/local/work/data/faces/ITV_mips2016_p3lr11', 'train')
+__sets['faces_itv_test'] = lambda: FacesDataset('/home/local/work/data/faces/ITV_mips2016_p3lr11', 'test')
+
+__sets['faces_aflw_ext_train'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_extended', 'train')
+__sets['faces_aflw_ext_test'] = lambda: FacesDataset('/home/local/work/data/faces/AFLW_extended', 'test')
+
+__sets['nightclub_test'] = lambda: FacesDataset('/home/local/work/data/faces/nightclub_video', 'test')
+
+__sets['heads_hh_train'] = lambda: FacesDataset('/home/local/work/data/heads/HH/train', 'train')
+__sets['heads_hh_test'] = lambda: FacesDataset('/home/local/work/data/heads/HH/test', 'test')
+
+__sets['heads_hh_val'] = lambda: FacesDataset('/home/local/work/data/heads/HH/val', 'test')
+__sets['heads_original24test'] = lambda: FacesDataset('/home/local/work/data/heads/OriginalTest_24', 'test')
+__sets['heads_tc'] = lambda: FacesDataset('/home/local/work/data/town_centre', 'test')
+
+
 
 # Set up voc_<year>_<split>_top_<k> using selective search "quality" mode
 # but only returning the first k boxesIJBAI

@@ -12,8 +12,11 @@ from fast_rcnn.config import cfg
 from .generate_anchors import generate_anchors
 from fast_rcnn.bbox_transform import bbox_transform_inv, clip_boxes
 from fast_rcnn.nms_wrapper import nms
+from utils.timer import Timer
 
+t = {'total': Timer(), 'nms': Timer(), 'sort': Timer()}
 DEBUG = False
+
 
 class ProposalLayer(caffe.Layer):
     """
@@ -63,6 +66,7 @@ class ProposalLayer(caffe.Layer):
         assert bottom[0].data.shape[0] == 1, \
             'Only single item batches are supported'
 
+        t['total'].tic()
         cfg_key = str(self.phase) # either 'TRAIN' or 'TEST'
         pre_nms_topN  = cfg[cfg_key].RPN_PRE_NMS_TOP_N
         post_nms_topN = cfg[cfg_key].RPN_POST_NMS_TOP_N
@@ -134,7 +138,9 @@ class ProposalLayer(caffe.Layer):
 
         # 4. sort all (proposal, score) pairs by score from highest to lowest
         # 5. take top pre_nms_topN (e.g. 6000)
+        t['sort'].tic()
         order = scores.ravel().argsort()[::-1]
+        t['sort'].toc()
         if pre_nms_topN > 0:
             order = order[:pre_nms_topN]
         proposals = proposals[order, :]
@@ -143,7 +149,9 @@ class ProposalLayer(caffe.Layer):
         # 6. apply nms (e.g. threshold = 0.7)
         # 7. take after_nms_topN (e.g. 300)
         # 8. return the top proposals (-> RoIs top)
+        t['nms'].tic()
         keep = nms(np.hstack((proposals, scores)), nms_thresh)
+        t['nms'].toc()
         if post_nms_topN > 0:
             keep = keep[:post_nms_topN]
         proposals = proposals[keep, :]
@@ -156,6 +164,12 @@ class ProposalLayer(caffe.Layer):
         blob = np.hstack((batch_inds, proposals.astype(np.float32, copy=False)))
         top[0].reshape(*(blob.shape))
         top[0].data[...] = blob
+
+        t['total'].toc()
+
+        # print('ptl total: {:.4f}, nms: {:.4f}, sort: {:.4f}'.format(t['total'].average_time,
+        #                                                             t['nms'].average_time,
+        #                                                             t['sort'].average_time))
 
         # [Optional] output scores blob
         if len(top) > 1:

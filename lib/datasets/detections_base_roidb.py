@@ -468,11 +468,16 @@ class FacesDataset(DetectionsBaseRoidb):
         self._gt_base = DetectionsBase(images_directory=imgs_dir)
         self._gt_base.load(gt_path)
 
+        blacklist_path = osp.join(self._dataset_path, 'blacklist.pickle')
+        if osp.exists(blacklist_path):
+            self._gt_base.load_blacklist(blacklist_path)
+            print('%d images was ignored' % len(self._gt_base._blacklist_images))
+
         filter_conditions = [('sign_class', 'face', None)]
         self._gt_base.set_filter_conditions(filter_conditions)
 
         self._gt = self._gt_base.get_gt(keep_ignore=True,
-                                        include_backgrounds=(self._mode == 'test'))
+                                        include_backgrounds=True)
         self._backgrounds = None
 
         if cfg.TRAIN.GENERATED_FRACTION > 0:

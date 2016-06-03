@@ -247,6 +247,44 @@ def apply_nms(all_boxes, thresh):
     return nms_boxes
 
 
+def dense_scan_image(net, im, block_h, block_w, oratio):
+
+    shift_h = int(block_h * 0.85)
+    shift_w = int(block_w * 0.85)
+
+    max_target_size = max(block_h, block_w)
+
+    cur_x, cur_y = 0, 0
+    scores, boxes = None, None
+    while cur_y < im.shape[0]:
+        cur_x = 0
+
+        while cur_x < im.shape[1]:
+            end_x = min(im.shape[1], cur_x + block_w)
+            end_y = min(im.shape[0], cur_y + block_h)
+            start_x = end_x - block_w
+            start_y = end_y - block_h
+
+            print(start_y, end_y, start_x, end_x)
+            sub_im = im[start_y:end_y, start_x:end_x, :]
+            tscores, tboxes = fixed_scale_detect(net, sub_im, max_target_size, None)
+
+            tboxes[:, 4] += start_x
+            tboxes[:, 6] += start_x
+            tboxes[:, 5] += start_y
+            tboxes[:, 7] += start_y
+
+            if scores is not None:
+                scores = np.vstack((scores, tscores))
+                boxes = np.vstack((boxes, tboxes))
+            else:
+                scores, boxes = tscores, tboxes
+
+            cur_x += shift_w
+        cur_y += shift_h
+    return scores, boxes
+
+
 def im_detect(net, im, box_proposals):
     max_target_size = max(cfg.TEST.SCALES)
     from visual_utils import plot_bboxes
@@ -264,8 +302,8 @@ def im_detect(net, im, box_proposals):
         else:
             block_h, block_w = max_target_size, max_size
 
-        shift_h = int(block_h * 0.85)
-        shift_w = int(block_w * 0.85)
+        shift_h = int(block_h * 0.90)
+        shift_w = int(block_w * 0.90)
 
         print(im.shape, shift_h, shift_w)
         cur_x, cur_y = 0, 0
@@ -299,6 +337,7 @@ def im_detect(net, im, box_proposals):
     for target_size in cfg.TEST.SCALES:
         if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < target_size:
             continue
+
         tscores, tboxes = fixed_scale_detect(net, im, target_size, box_proposals)
         if scores is not None:
             scores = np.vstack((scores, tscores))
@@ -322,7 +361,7 @@ def test_net(net, imdb):
         max_per_image = 100
     # detection threshold for each class (this is adaptively set based on the
     # max_per_set constraint)
-    thresh = -np.inf * np.ones(imdb.num_classes)
+    thresh = 0.05 * np.ones(imdb.num_classes)
     # top_scores will hold one minheap of scores per class (used to enforce
     # the max_per_set constraint)
     top_scores = [[] for _ in range(imdb.num_classes)]
@@ -368,15 +407,6 @@ def test_net(net, imdb):
             top_inds = np.argsort(-cls_scores)[:max_per_image]
             cls_scores = cls_scores[top_inds]
             cls_boxes = cls_boxes[top_inds, :]
-            # push new scores onto the minheap
-            for val in cls_scores:
-                heapq.heappush(top_scores[j], val)
-            # if we've collected more than the max number of detection,
-            # then pop items off the minheap and update the class threshold
-            if len(top_scores[j]) > max_per_set:
-                while len(top_scores[j]) > max_per_set:
-                    heapq.heappop(top_scores[j])
-                thresh[j] = top_scores[j][0]
 
             all_boxes[j][i] = \
                     np.hstack((cls_boxes, cls_scores[:, np.newaxis])) \
