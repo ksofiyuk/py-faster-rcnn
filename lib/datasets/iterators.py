@@ -1,0 +1,148 @@
+from abc import abstractmethod
+from abc import ABCMeta
+import random
+
+from datasets.collections import ImagesCollection
+
+
+class AbstractImagesIterator(metaclass=ABCMeta):
+    """Интерфейс итератора коллекции изображений.
+    Данный класс позволяет итерировать по загруженной коллекции изображений.
+    """
+
+    def __iter__(self):
+        return self
+
+    @abstractmethod
+    def __next__(self) -> tuple:
+        """
+        Получить следующий элемент из коллекции
+
+        Returns:
+            Кортеж (sample, max_size, scales)
+        """
+        pass
+
+
+class DirectIterator(AbstractImagesIterator):
+    """Итератор коллекции в прямом порядке"""
+
+    def __init__(self, images_collection: ImagesCollection):
+        """
+        Args:
+            images_collection: Коллекция изображений
+        Returns:
+        """
+        super().__init__()
+
+        self._images_collection = images_collection
+        self._max_size = self._images_collection.max_size
+        self._scales = self._images_collection.scales
+
+        self._indx = 0
+
+    def __next__(self) -> tuple:
+        if self._indx >= len(self._images_collection):
+            raise StopIteration()
+        else:
+            sample = self._images_collection[self._indx]
+            self._indx += 1
+
+            return sample, self._max_size, self._scales
+
+    def __len__(self):
+        return len(self._images_collection)
+
+
+class RandomOrderIterator(AbstractImagesIterator):
+    """Итератор коллекции в случайном порядке"""
+
+    def __init__(self, images_collection: ImagesCollection):
+        """
+        Args:
+            images_collection: Коллекция изображений
+        Returns:
+        """
+        super().__init__()
+
+        self._images_collection = images_collection
+        self._max_size = self._images_collection.max_size
+        self._scales = self._images_collection.scales
+
+        self._indx = 0
+        self._order = list(range(len(images_collection)))
+        random.shuffle(self._order)
+
+    def __next__(self) -> tuple:
+        if self._indx >= len(self._images_collection):
+            raise StopIteration()
+        else:
+            sample = self._images_collection[self._order[self._indx]]
+            self._indx += 1
+
+            return sample, self._max_size, self._scales
+
+    def __len__(self):
+        return len(self._images_collection)
+
+
+class MultiRandomOrderIterator(AbstractImagesIterator):
+    """Итератор нескольких коллекций в случайном порядке как единого целого"""
+
+    def __init__(self, images_collections: list):
+        """
+
+        Args:
+            images_collections: список коллекций ImagesCollection
+
+        Returns:
+
+        """
+        super().__init__()
+
+        self._iters = [RandomOrderIterator(x) for x in images_collections]
+        self._len = sum(len(x) for x in images_collections)
+        self._order = []
+        for i, x in enumerate(images_collections):
+            self._order += [i] * len(x)
+
+        random.shuffle(self._order)
+        self._indx = 0
+
+    def __next__(self) -> tuple:
+        sample = next(self._iters[self._order[self._indx]])
+        self._indx += 1
+        return sample
+
+    def __len__(self):
+        return self._len
+
+
+class MultiDirectIterator(AbstractImagesIterator):
+    """Итератор нескольких коллекций в прямом порядке как единого целого"""
+
+    def __init__(self, images_collections: list):
+        """
+        Args:
+            images_collections: список коллекций ImagesCollection
+
+        Returns:
+
+        """
+        super().__init__()
+
+        self._iters = [DirectIterator(x) for x in images_collections]
+        self._len = sum(len(x) for x in images_collections)
+        self._order = []
+        for i, x in enumerate(images_collections):
+            self._order += [i] * len(x)
+
+        self._indx = 0
+
+    def __next__(self) -> tuple:
+        sample = next(self._iters[self._order[self._indx]])
+        self._indx += 1
+        return sample
+
+    def __len__(self):
+        return self._len
