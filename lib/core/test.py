@@ -7,22 +7,25 @@
 
 """Test a Fast R-CNN network on an imdb (image database)."""
 
-from fast_rcnn.config import cfg, get_output_dir
-from fast_rcnn.bbox_transform import clip_boxes, bbox_transform_inv
+from core.config import cfg, get_output_dir
+from core.bbox_transform import clip_boxes, bbox_transform_inv
 import argparse
 from utils.timer import Timer
 import numpy as np
 import cv2
 import caffe
-from fast_rcnn.nms_wrapper import nms
+from core.nms_wrapper import nms
 import pickle
-import heapq
 from utils.blob import im_list_to_blob
 import os
 import re
+import json
+
+from datasets.collections import ImagesCollection
+from datasets.iterators import DirectIterator
 
 
-def _get_image_blob(im, target_size):
+def _get_image_blob(sample, target_size):
     """Converts an image into a network input.
 
     Arguments:
@@ -33,7 +36,7 @@ def _get_image_blob(im, target_size):
         im_scale_factors (list): list of image scales (relative to im) used
             in the image pyramid
     """
-    im_orig = im.astype(np.float32, copy=True)
+    im_orig = sample.bgr_data.astype(np.float32, copy=True)
     im_orig -= cfg.PIXEL_MEANS
 
     im_shape = im_orig.shape
@@ -45,8 +48,8 @@ def _get_image_blob(im, target_size):
 
     im_scale = float(target_size) / float(im_size_min)
     # Prevent the biggest axis from being more than MAX_SIZE
-    if np.round(im_scale * im_size_max) > cfg.TEST.MAX_SIZE:
-        im_scale = float(cfg.TEST.MAX_SIZE) / float(im_size_max)
+    if np.round(im_scale * im_size_max) > sample.max_size:
+        im_scale = float(sample.max_size) / float(im_size_max)
     im = cv2.resize(im_orig, None, None, fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
     im_scale_factors.append(im_scale)
@@ -102,16 +105,16 @@ def _project_im_rois(im_rois, scales):
     return rois, levels
 
 
-def _get_blobs(im, target_size, rois):
+def _get_blobs(sample, target_size, rois):
     """Convert an image and RoIs within that image into network inputs."""
     blobs = {'data' : None, 'rois' : None}
-    blobs['data'], im_scale_factors = _get_image_blob(im, target_size)
+    blobs['data'], im_scale_factors = _get_image_blob(sample, target_size)
     if not cfg.TEST.HAS_RPN:
         blobs['rois'] = _get_rois_blob(rois, im_scale_factors)
     return blobs, im_scale_factors
 
 
-def fixed_scale_detect(net, im, target_size, boxes=None):
+def fixed_scale_detect(net, sample, target_size, boxes=None):
     """Detect object classes in an image given object proposals.
 
     Arguments:
@@ -124,7 +127,7 @@ def fixed_scale_detect(net, im, target_size, boxes=None):
             background as object category 0)
         boxes (ndarray): R x (4*K) array of predicted bounding boxes
     """
-    blobs, im_scales = _get_blobs(im, target_size, boxes)
+    blobs, im_scales = _get_blobs(sample, target_size, boxes)
 
     # When mapping from image ROIs to feature map ROIs, there's some aliasing
     # (some distinct image ROIs get mapped to the same feature ROI).
@@ -285,17 +288,18 @@ def dense_scan_image(net, im, block_h, block_w, oratio):
     return scores, boxes
 
 
-def im_detect(net, im, box_proposals):
-    max_target_size = max(cfg.TEST.SCALES)
-    from visual_utils import plot_bboxes
+def im_detect(net, sample):
+    max_target_size = max(sample.scales)
+
+    im = sample.bgr_data
 
     scores, boxes = None, None
     if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < max_target_size:
         target_size = np.min(im.shape[:2])
-        scores, boxes = fixed_scale_detect(net, im, target_size, box_proposals)
+        scores, boxes = fixed_scale_detect(net, sample, target_size)
 
     elif cfg.TEST.DENSE_SCAN and np.min(im.shape[:2]) > 1.5 * max_target_size:
-        max_size = min(cfg.TEST.MAX_SIZE, np.max(im.shape[:2]))
+        max_size = min(sample.max_size, np.max(im.shape[:2]))
 
         if im.shape[0] > im.shape[1]:
             block_h, block_w = max_size, max_target_size
@@ -318,7 +322,7 @@ def im_detect(net, im, box_proposals):
 
                 print(start_y, end_y, start_x, end_x)
                 sub_im = im[start_y:end_y, start_x:end_x, :]
-                tscores, tboxes = fixed_scale_detect(net, sub_im, max_target_size, box_proposals)
+                tscores, tboxes = fixed_scale_detect(net, sub_im, max_target_size)
 
                 tboxes[:, 4] += start_x
                 tboxes[:, 6] += start_x
@@ -334,11 +338,11 @@ def im_detect(net, im, box_proposals):
                 cur_x += shift_w
             cur_y += shift_h
 
-    for target_size in cfg.TEST.SCALES:
+    for target_size in sample.scales:
         if cfg.TEST.WITHOUT_UPSAMPLE and np.min(im.shape[:2]) < target_size:
             continue
 
-        tscores, tboxes = fixed_scale_detect(net, im, target_size, box_proposals)
+        tscores, tboxes = fixed_scale_detect(net, sample, target_size)
         if scores is not None:
             scores = np.vstack((scores, tscores))
             boxes = np.vstack((boxes, tboxes))
@@ -348,97 +352,73 @@ def im_detect(net, im, box_proposals):
     return scores, boxes
 
 
-def test_net(net, imdb):
-    """Test a Fast R-CNN network on an image database."""
-    num_images = len(imdb.image_index)
-    # heuristic: keep an average of 40 detections per class per images prior
-    # to NMS
-    if cfg.TEST.RPN_ONLY:
-        max_per_set = 400 * num_images
-        max_per_image = 400
-    else:
-        max_per_set = 40 * num_images
-        max_per_image = 100
-    # detection threshold for each class (this is adaptively set based on the
-    # max_per_set constraint)
-    thresh = 0.05 * np.ones(imdb.num_classes)
-    # top_scores will hold one minheap of scores per class (used to enforce
-    # the max_per_set constraint)
-    top_scores = [[] for _ in range(imdb.num_classes)]
-    # all detections are collected into:
-    #    all_boxes[cls][image] = N x 5 array of detections in
-    #    (x1, y1, x2, y2, score)
-    all_boxes = [[[] for _ in range(num_images)]
-                 for _ in range(imdb.num_classes)]
+def to_json_format(detections, object_class):
+    bboxes = []
+    for det in detections:
+        bbox = {'x': int(det[0]), 'y': int(det[1]),
+                'w': int(det[2]-det[0]), 'h': int(det[3]-det[1]),
+                'score': float(det[4]), 'class': object_class}
+        bboxes.append(bbox)
+    return bboxes
 
-    output_dir = get_output_dir(imdb, None)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
 
-    # timers
+def test_image_collection(net, image_collection):
+    max_per_image = cfg.TEST.MAX_PER_IMAGE
+    SCORE_THRESH = 0.05
+    NUM_CLASSES = 2
+
     _t = {'im_detect' : Timer(), 'misc' : Timer()}
+    all_detections = {}
 
-    if not cfg.TEST.HAS_RPN:
-        roidb = imdb.roidb
+    for indx, sample in enumerate(DirectIterator(image_collection)):
+        image_basename = os.path.basename(sample.id)
 
-    detections = {}
-    for i in range(num_images):
-        # filter out any ground truth boxes
-        if cfg.TEST.HAS_RPN:
-            box_proposals = None
-        else:
-            box_proposals = roidb[i]['boxes'][roidb[i]['gt_classes'] == 0]
-
-        image_path = imdb.image_path_at(i)
-        image_basename = os.path.basename(image_path)
-
-        im = cv2.imread(image_path)
         _t['im_detect'].tic()
-
-        scores, boxes = im_detect(net, im, box_proposals)
-
+        scores, boxes = im_detect(net, sample)
         _t['im_detect'].toc()
 
         _t['misc'].tic()
-        for j in range(1, imdb.num_classes):
-            inds = np.where(scores[:, j] > thresh[j])[0]
+        for j in range(1, NUM_CLASSES):
+            inds = np.where(scores[:, j] > SCORE_THRESH)[0]
             cls_scores = scores[inds, j]
             cls_boxes = boxes[inds, j*4:(j+1)*4]
             top_inds = np.argsort(-cls_scores)[:max_per_image]
             cls_scores = cls_scores[top_inds]
             cls_boxes = cls_boxes[top_inds, :]
 
-            all_boxes[j][i] = \
+            detections = \
                     np.hstack((cls_boxes, cls_scores[:, np.newaxis])) \
                     .astype(np.float32, copy=False)
-            detections[image_basename] = all_boxes[j][i]
 
-            if 0:
-                keep = nms(all_boxes[j][i], 0.3)
-                vis_detections(im, imdb.classes[j], all_boxes[j][i][keep, :])
+            keep = nms(detections, cfg.TEST.FINAL_NMS)
+            detections = detections[keep]
+            detections = to_json_format(detections, j)
+            all_detections[image_basename] = detections
+
         _t['misc'].toc()
 
         print('im_detect: {:d}/{:d} {:.3f}s {:.3f}s' \
-              .format(i + 1, num_images, _t['im_detect'].average_time,
-                      _t['misc'].average_time))
+              .format(indx + 1, len(image_collection),
+                      _t['im_detect'].average_time, _t['misc'].average_time))
 
-    for j in range(1, imdb.num_classes):
-        for i in range(num_images):
-            inds = np.where(all_boxes[j][i][:, -1] > thresh[j])[0]
-            all_boxes[j][i] = all_boxes[j][i][inds, :]
+    return all_detections
 
-    m = re.match(".*_(\d+)((\..*)|$)", net.name)
-    if m:
-        det_filename = 'detections_' + m.group(1) + ('_rpn.pkl' if cfg.TEST.RPN_ONLY else '.pkl')
-    else:
-        det_filename = 'detections' + ('_rpn.pkl' if cfg.TEST.RPN_ONLY else '.pkl')
 
-    det_filepath = os.path.join(output_dir, det_filename)
-    with open(det_filepath, 'wb') as f:
-        pickle.dump(detections, f, pickle.HIGHEST_PROTOCOL)
+def test_net(net, output_dir):
 
-    # print('Applying NMS to all detections')
-    # nms_dets = apply_nms(all_boxes, cfg.TEST.NMS)
-    #
-    # print('Evaluating detections')
-    # imdb.evaluate_detections(nms_dets, output_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    for indx, dataset in enumerate(cfg.TEST.DATASETS):
+        image_collection = ImagesCollection(dataset)
+
+        print("# %d/%d dataset %s: %d images" %
+              (indx + 1, len(cfg.TEST.DATASETS), dataset.PATH, len(image_collection)))
+
+        detections = test_image_collection(net, image_collection)
+
+        output_path = os.path.join(output_dir, dataset.OUTPUT_FILE)
+        with open(output_path, 'w') as f:
+            json.dump(detections, f, indent=4)
+
+        print('Output detections file: %s\n' % output_path)

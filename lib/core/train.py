@@ -1,15 +1,5 @@
-# --------------------------------------------------------
-# Fast R-CNN
-# Copyright (c) 2015 Microsoft
-# Licensed under The MIT License [see LICENSE for details]
-# Written by Ross Girshick
-# --------------------------------------------------------
-
-"""Train a Fast R-CNN network."""
-
 import caffe
-from fast_rcnn.config import cfg
-import roi_data_layer.roidb as rdl_roidb
+from core.config import cfg
 from utils.timer import Timer
 import numpy as np
 import os
@@ -18,13 +8,15 @@ from caffe.proto import caffe_pb2
 import google.protobuf as pb2
 import pickle
 
+from datasets.collections import ImagesCollection
+
 class SolverWrapper(object):
     """A simple wrapper around Caffe's solver.
     This wrapper gives us control over he snapshotting process, which we
     use to unnormalize the learned bounding-box regression weights.
     """
 
-    def __init__(self, solver_prototxt, roidb, output_dir,
+    def __init__(self, solver_prototxt, images_dbs, output_dir,
                  pretrained_model=None):
         """Initialize the SolverWrapper."""
         self.output_dir = output_dir
@@ -40,11 +32,11 @@ class SolverWrapper(object):
             # fixed statistics to compute a priori
             assert cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED
 
-        if cfg.TRAIN.BBOX_REG:
-            print('Computing bounding-box regression targets...')
-            self.bbox_means, self.bbox_stds = \
-                    rdl_roidb.add_bbox_regression_targets(roidb)
-            print('done')
+        # if cfg.TRAIN.BBOX_REG:
+        #     print('Computing bounding-box regression targets...')
+        #     self.bbox_means, self.bbox_stds = \
+        #             rdl_roidb.add_bbox_regression_targets(roidb)
+        #     print('done')
 
         self.solver = caffe.SGDSolver(solver_prototxt)
         if pretrained_model is not None:
@@ -57,7 +49,7 @@ class SolverWrapper(object):
             pb2.text_format.Merge(f.read(), self.solver_param)
 
         self._data_layer = self.solver.net.layers[0]
-        self._data_layer.set_roidb(roidb)
+        self._data_layer.set_images_dbs(images_dbs)
         self._data_layer.net = self.solver.net
 
     def snapshot(self):
@@ -169,20 +161,17 @@ class SolverWrapper(object):
         return model_paths
 
 
-def get_training_roidb(imdb):
-    """Returns a roidb (Region of Interest database) for use in training."""
-    return imdb.roidb
-
-
-def train_net(solver_prototxt, roidb, output_dir,
+def train_net(solver_prototxt, output_dir,
               pretrained_model=None, max_iters=None):
     if max_iters is None:
         max_iters = cfg.TRAIN.MAX_ITERS
     if pretrained_model is None:
         pretrained_model = cfg.WEIGHTS_PATH
 
-    """Train a Fast R-CNN network."""
-    sw = SolverWrapper(solver_prototxt, roidb, output_dir,
+    imgs_dbs = [ImagesCollection(x) for x in cfg.TRAIN.DATASETS]
+
+    """Train a network."""
+    sw = SolverWrapper(solver_prototxt, imgs_dbs, output_dir,
                        pretrained_model=pretrained_model)
 
     print('Solving...')

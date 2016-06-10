@@ -1,10 +1,3 @@
-# --------------------------------------------------------
-# Fast R-CNN
-# Copyright (c) 2015 Microsoft
-# Licensed under The MIT License [see LICENSE for details]
-# Written by Ross Girshick
-# --------------------------------------------------------
-
 """Fast R-CNN config system.
 
 This file specifies default config options for Fast R-CNN. You should not
@@ -43,6 +36,7 @@ __C.RPN.ANCHOR_SHIFT_NUM_XY = [(1,1)]
 
 __C.TRAIN = edict()
 
+__C.TRAIN.DATASETS = []
 # Scales to use during training (can list multiple scales)
 # Each scale is the pixel size of an image's shortest side
 __C.TRAIN.SCALES = (600,)
@@ -160,21 +154,20 @@ __C.TRAIN.SO_FORCE_ROUNDS = 5
 #
 # Testing options
 #
-
 __C.TEST = edict()
 
+__C.TEST.DATASETS = []
 # Scales to use during testing (can list multiple scales)
 # Each scale is the pixel size of an image's shortest side
-__C.TEST.SCALES = (600,)
 __C.TEST.WITHOUT_UPSAMPLE = False
 __C.TEST.DENSE_SCAN = False
 
-# Max pixel size of the longest side of a scaled input image
-__C.TEST.MAX_SIZE = 1000
+__C.TEST.MAX_PER_IMAGE = 100
 
 # Overlap threshold used for non-maximum suppression (suppress boxes with
 # IoU >= this threshold)
 __C.TEST.NMS = 0.3
+__C.TEST.FINAL_NMS = 0.5
 
 # Experimental: treat the (K+1) units in the cls_score layer as linear
 # predictors (trained, eg, with one-vs-rest SVMs).
@@ -200,8 +193,6 @@ __C.TEST.RPN_PRE_NMS_TOP_N = 6000
 __C.TEST.RPN_POST_NMS_TOP_N = 300
 # Proposal height and width both need to be greater than RPN_MIN_SIZE (at orig image scale)
 __C.TEST.RPN_MIN_SIZE = 16
-
-__C.TEST.DATASET = 'default'
 
 #
 # MISC
@@ -250,13 +241,13 @@ __C.USE_GPU_NMS = True
 __C.GPU_ID = 0
 
 
-def get_output_dir(imdb, net):
+def get_output_dir(suffix, net):
     """Return the directory where experimental artifacts are placed.
 
     A canonical path is built using the name from an imdb and a network
     (if not None).
     """
-    path = osp.abspath(osp.join(__C.ROOT_DIR, 'exps', __C.EXP_DIR, 'output', imdb.name))
+    path = osp.abspath(osp.join(__C.ROOT_DIR, 'exps', __C.EXP_DIR, 'output', suffix))
     if net is None:
         return path
     else:

@@ -19,8 +19,16 @@ class AbstractImagesIterator(metaclass=ABCMeta):
         Получить следующий элемент из коллекции
 
         Returns:
-            Кортеж (sample, max_size, scales)
+            ImageSample
         """
+        pass
+
+    @abstractmethod
+    def _init_iter(self):
+        pass
+
+    @abstractmethod
+    def __len__(self):
         pass
 
 
@@ -36,9 +44,10 @@ class DirectIterator(AbstractImagesIterator):
         super().__init__()
 
         self._images_collection = images_collection
-        self._max_size = self._images_collection.max_size
-        self._scales = self._images_collection.scales
 
+        self._init_iter()
+
+    def _init_iter(self):
         self._indx = 0
 
     def __next__(self) -> tuple:
@@ -48,7 +57,7 @@ class DirectIterator(AbstractImagesIterator):
             sample = self._images_collection[self._indx]
             self._indx += 1
 
-            return sample, self._max_size, self._scales
+            return sample
 
     def __len__(self):
         return len(self._images_collection)
@@ -66,11 +75,12 @@ class RandomOrderIterator(AbstractImagesIterator):
         super().__init__()
 
         self._images_collection = images_collection
-        self._max_size = self._images_collection.max_size
-        self._scales = self._images_collection.scales
 
-        self._indx = 0
         self._order = list(range(len(images_collection)))
+        self._init_iter()
+
+    def _init_iter(self):
+        self._indx = 0
         random.shuffle(self._order)
 
     def __next__(self) -> tuple:
@@ -80,7 +90,7 @@ class RandomOrderIterator(AbstractImagesIterator):
             sample = self._images_collection[self._order[self._indx]]
             self._indx += 1
 
-            return sample, self._max_size, self._scales
+            return sample
 
     def __len__(self):
         return len(self._images_collection)
@@ -105,6 +115,12 @@ class MultiRandomOrderIterator(AbstractImagesIterator):
         self._order = []
         for i, x in enumerate(images_collections):
             self._order += [i] * len(x)
+
+        self._init_iter()
+
+    def _init_iter(self):
+        for iter in self._iters:
+            iter._init_iter()
 
         random.shuffle(self._order)
         self._indx = 0
@@ -137,6 +153,12 @@ class MultiDirectIterator(AbstractImagesIterator):
         for i, x in enumerate(images_collections):
             self._order += [i] * len(x)
 
+        self._init_iter()
+
+    def _init_iter(self):
+        for iter in self._iters:
+            iter._init_iter()
+
         self._indx = 0
 
     def __next__(self) -> tuple:
@@ -146,3 +168,36 @@ class MultiDirectIterator(AbstractImagesIterator):
 
     def __len__(self):
         return self._len
+
+
+class InfinityLoopIterator(AbstractImagesIterator):
+    """ Обёртка над итератором, такая что при исчерапании базового итератора,
+        он инициализируется заново.
+    """
+
+    def __init__(self, images_iterator):
+        """
+
+        Args:
+            images_iterator: Итератор AbstractImagesIterator
+
+        Returns:
+
+        """
+        super().__init__()
+
+        self._iter = images_iterator
+
+    def __next__(self) -> tuple:
+        try:
+            return next(self._iter)
+        except StopIteration:
+            self._iter._init_iter()
+            return next(self._iter)
+
+    def _init_iter(self):
+        self._iter._init_iter()
+
+    def __len__(self):
+        return len(self._iter)
+

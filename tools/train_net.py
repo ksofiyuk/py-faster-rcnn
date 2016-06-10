@@ -10,15 +10,14 @@
 """Train a Fast R-CNN network on a region of interest database."""
 
 import _init_paths
-from fast_rcnn.train import get_training_roidb, train_net
-from fast_rcnn.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
-from datasets.factory import get_imdb
-import datasets.imdb
+from core.train import train_net
+from core.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 import caffe
 import argparse
 import pprint
 import numpy as np
 import sys
+import datetime
 
 def parse_args():
     """
@@ -40,9 +39,6 @@ def parse_args():
     parser.add_argument('--cfg', dest='cfg_file',
                         help='optional config file',
                         default=None, type=str)
-    parser.add_argument('--imdb', dest='imdb_name',
-                        help='dataset to train on',
-                        default=None, type=str)
     parser.add_argument('--rand', dest='randomize',
                         help='randomize (do not use a fixed seed)',
                         action='store_true')
@@ -57,24 +53,6 @@ def parse_args():
 
     args = parser.parse_args()
     return args
-
-def combined_roidb(imdb_names):
-    def get_roidb(imdb_name):
-        imdb = get_imdb(imdb_name)
-        print('Loaded dataset `{:s}` for training'.format(imdb.name))
-        imdb.set_proposal_method(cfg.TRAIN.PROPOSAL_METHOD)
-        print('Set proposal method: {:s}'.format(cfg.TRAIN.PROPOSAL_METHOD))
-        return imdb
-
-    roidbs = [get_roidb(s) for s in imdb_names.split('+')]
-    roidb = roidbs[0]
-    if len(roidbs) > 1:
-        for r in roidbs[1:]:
-            roidb.extend(r)
-        imdb = datasets.imdb.imdb(imdb_names)
-    else:
-        imdb = get_imdb(imdb_names)
-    return imdb, roidb
 
 if __name__ == '__main__':
     args = parse_args()
@@ -107,12 +85,10 @@ if __name__ == '__main__':
     if args.imdb_name is None:
         args.imdb_name = cfg.TRAIN.DATASET
 
-    imdb, roidb = combined_roidb(args.imdb_name)
-    print('{:d} roidb entries'.format(len(roidb.roidb)))
-
-    output_dir = get_output_dir(imdb, None)
+    time_suffix = 'train_' + datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+    output_dir = get_output_dir(time_suffix, None)
     print('Output will be saved to `{:s}`'.format(output_dir))
 
-    train_net(args.solver, roidb, output_dir,
+    train_net(args.solver, output_dir,
               pretrained_model=args.pretrained_model,
               max_iters=args.max_iters)

@@ -9,11 +9,11 @@ import caffe
 import yaml
 import numpy as np
 import numpy.random as npr
-from fast_rcnn.config import cfg
-from fast_rcnn.bbox_transform import bbox_transform
+from core.config import cfg
+from core.bbox_transform import bbox_transform
 from .generate_anchors import generate_anchors
 from utils.cython_bbox import bbox_overlaps
-from fast_rcnn.nms_wrapper import nms
+from core.nms_wrapper import nms
 
 
 DEBUG = False

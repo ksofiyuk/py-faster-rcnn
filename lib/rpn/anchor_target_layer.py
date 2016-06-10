@@ -8,12 +8,12 @@
 import os
 import caffe
 import yaml
-from fast_rcnn.config import cfg
+from core.config import cfg
 import numpy as np
 import numpy.random as npr
 from .generate_anchors import generate_anchors
 from utils.cython_bbox import bbox_overlaps
-from fast_rcnn.bbox_transform import bbox_transform
+from core.bbox_transform import bbox_transform
 from utils.timer import Timer
 
 
@@ -93,13 +93,10 @@ class AnchorTargetLayer(caffe.Layer):
 
         # GT boxes (x1, y1, x2, y2, label)
         gt_boxes = bottom[1].data
-        ignored_mask = gt_boxes[:, 3] < 0
-
-        gt_ignored_boxes = gt_boxes[ignored_mask, :]
-        gt_boxes = gt_boxes[np.logical_not(ignored_mask), :]
+        gt_ignored_boxes = bottom[2].data
 
         # im_info
-        im_info = bottom[2].data[0, :]
+        im_info = bottom[3].data[0, :]
 
         if 0 and DEBUG:
             print('')
@@ -152,38 +149,39 @@ class AnchorTargetLayer(caffe.Layer):
         # overlaps between the anchors and the gt boxes
         # overlaps (ex, gt)
 
-        boxes = _square_boxes(gt_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_boxes
-        overlaps = bbox_overlaps(
-            np.ascontiguousarray(anchors, dtype=np.float),
-            np.ascontiguousarray(boxes, dtype=np.float))
+        if gt_boxes.shape[0]:
+            boxes = _square_boxes(gt_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_boxes
+            overlaps = bbox_overlaps(
+                np.ascontiguousarray(anchors, dtype=np.float),
+                np.ascontiguousarray(boxes, dtype=np.float))
 
-        argmax_overlaps = overlaps.argmax(axis=1)
-        max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
+            argmax_overlaps = overlaps.argmax(axis=1)
+            max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
 
-        gt_argmax_overlaps = overlaps.argmax(axis=0)
-        gt_max_overlaps = overlaps[gt_argmax_overlaps,
-                                   np.arange(overlaps.shape[1])]
-        gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
+            if not cfg.TRAIN.RPN_CLOBBER_POSITIVES:
+                # assign bg labels first so that positive labels can clobber them
+                labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
 
+            # gt_argmax_overlaps = overlaps.argmax(axis=0)
+            # gt_max_overlaps = overlaps[gt_argmax_overlaps,
+            #                            np.arange(overlaps.shape[1])]
+            # gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
 
-        if not cfg.TRAIN.RPN_CLOBBER_POSITIVES:
-            # assign bg labels first so that positive labels can clobber them
-            labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
+            # fg label: for each gt, anchor with highest overlap
+            # if np.max(max_overlaps) > 0.5:
+            #     labels[gt_argmax_overlaps] = 1
 
-        # fg label: for each gt, anchor with highest overlap
-        # if np.max(max_overlaps) > 0.5:
-        #     labels[gt_argmax_overlaps] = 1
+            # fg label: above threshold IOU
+            labels[max_overlaps >= cfg.TRAIN.RPN_POSITIVE_OVERLAP] = 1
 
-        # fg label: above threshold IOU
-        labels[max_overlaps >= cfg.TRAIN.RPN_POSITIVE_OVERLAP] = 1
-
-        if cfg.TRAIN.RPN_CLOBBER_POSITIVES:
-            # assign bg labels last so that negative labels can clobber positives
-            labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
+            if cfg.TRAIN.RPN_CLOBBER_POSITIVES:
+                # assign bg labels last so that negative labels can clobber positives
+                labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
+        else:
+            labels.fill(0)
 
        # ignored label
         if len(gt_ignored_boxes):
-            gt_ignored_boxes[:, 3] *= -1
             boxes = _square_boxes(gt_ignored_boxes) if cfg.TRAIN.RPN_SQUARE_TARGETS else gt_ignored_boxes
             ignored_overlaps = bbox_overlaps(
                 np.ascontiguousarray(anchors, dtype=np.float),
@@ -202,7 +200,6 @@ class AnchorTargetLayer(caffe.Layer):
             disable_inds = npr.choice(
                 fg_inds, size=(len(fg_inds) - num_fg), replace=False)
             labels[disable_inds] = -1
-
 
         if cfg.TRAIN.RPN_LINEAR_TNF_K > 0:
             self._top_neg_fraction = min(self._top_neg_fraction + cfg.TRAIN.RPN_LINEAR_TNF_K, #0.00008
@@ -226,15 +223,16 @@ class AnchorTargetLayer(caffe.Layer):
         # subsample negative labels if we have too many
         # num_bg = max(num_fg, cfg.TRAIN.RPN_BATCHSIZE - num_fg)
         num_bg = cfg.TRAIN.RPN_BATCHSIZE - np.sum(labels == 1)
+
         bg_inds = np.where(labels == 0)[0]
         if len(bg_inds) > num_bg:
-            keep_first = np.floor(num_bg * self._top_neg_fraction)
+            keep_first = int(np.floor(num_bg * self._top_neg_fraction))
 
             if keep_first > 0:
                 # scores are (1, A, H, W) format
                 # transpose to (1, H, W, A)
                 # reshape to (1 * H * W * A, 1) where rows are ordered by (h, w, a)
-                scores = bottom[4].data[:, self._num_anchors:, :, :]
+                scores = bottom[5].data[:, self._num_anchors:, :, :]
                 scores = scores.transpose((0, 2, 3, 1)).reshape((-1, 1))
                 scores = scores[inds_inside]
                 order = scores[bg_inds].ravel().argsort()[::-1]
@@ -249,7 +247,8 @@ class AnchorTargetLayer(caffe.Layer):
         # print (np.round(t.diff, 4), np.round(t.average_time, 4),
         #        np.sum(labels == -1), np.sum(labels == 0), np.sum(labels == 1))
         bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)
-        bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
+        if gt_boxes.shape[0]:
+            bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
 
         bbox_inside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
         bbox_inside_weights[labels == 1, :] = np.array(cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS)
@@ -361,6 +360,9 @@ def _compute_targets(ex_rois, gt_rois):
 
 
 def _square_boxes(boxes):
+    if boxes.shape[0] == 0:
+        return boxes
+
     ret = boxes.copy()
     gt_sz = np.sqrt((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3]-boxes[:, 1]))
     gt_cntr_x = 0.5 * (boxes[:, 0] + boxes[:, 2])

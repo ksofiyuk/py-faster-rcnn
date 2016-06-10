@@ -3,7 +3,7 @@ from datasets.loaders import load_bboxes_dataset_with_json_marking
 from datasets.loaders import load_images_from_directory_without_marking
 
 
-class ImagesCollection():
+class ImagesCollection(object):
     """Коллекция изображений, поддерживает различные форматы:
         BBOX_JSON_MARKING - изображения с разметкой в json
                 (см. loaders.load_bboxes_dataset_with_json_marking)
@@ -38,14 +38,17 @@ class ImagesCollection():
             if 'MARKING_NAME' in params:
                 self._samples = \
                     load_bboxes_dataset_with_json_marking(
-                        params['PATH'], params['MARKING_NAME'])
+                        params['PATH'], params['MARKING_NAME'],
+                        self._max_size, self._scales)
             else:
                 self._samples = \
-                    load_bboxes_dataset_with_json_marking(params['PATH'])
+                    load_bboxes_dataset_with_json_marking(
+                        params['PATH'], 'marking.json', self._max_size, self._scales)
 
         elif params['TYPE'] == 'IMAGES_DIR':
             self._samples = \
-                load_images_from_directory_without_marking(params['PATH'])
+                load_images_from_directory_without_marking(
+                    params['PATH'], self._max_size, self._scales)
 
     @property
     def max_size(self) -> int:
@@ -60,5 +63,3 @@ class ImagesCollection():
 
     def __getitem__(self, key: int) -> ImageSample:
         return self._samples[key]
-
-

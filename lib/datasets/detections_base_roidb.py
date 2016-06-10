@@ -8,7 +8,7 @@ import os.path as osp
 
 from pprint import pprint
 from collections import defaultdict
-from fast_rcnn.config import cfg
+from core.config import cfg
 from copy import deepcopy
 
 from ground_truth import DetectionsBase

@@ -10,13 +10,14 @@
 """Test a Fast R-CNN network on an image database."""
 
 import _init_paths
-from fast_rcnn.test import test_net
-from fast_rcnn.config import cfg, cfg_from_file, cfg_from_list
-from datasets.factory import get_imdb
+from core.test import test_net
+from core.config import cfg, cfg_from_file, cfg_from_list
+from core.config import get_output_dir
 import caffe
 import argparse
 import pprint
 import time, os, sys
+import datetime
 
 def parse_args():
     """
@@ -36,11 +37,6 @@ def parse_args():
     parser.add_argument('--wait', dest='wait',
                         help='wait until net file exists',
                         default=True, type=bool)
-    parser.add_argument('--imdb', dest='imdb_name',
-                        help='dataset to test',
-                        default=None, type=str)
-    parser.add_argument('--comp', dest='comp_mode', help='competition mode',
-                        action='store_true')
     parser.add_argument('--set', dest='set_cfgs',
                         help='set config keys', default=None,
                         nargs=argparse.REMAINDER)
@@ -81,12 +77,6 @@ if __name__ == '__main__':
     net = caffe.Net(args.prototxt, args.caffemodel, caffe.TEST)
     net.name = os.path.splitext(os.path.basename(args.caffemodel))[0]
 
-    if args.imdb_name is None:
-        args.imdb_name = cfg.TEST.DATASET
-
-    imdb = get_imdb(args.imdb_name)
-    imdb.competition_mode(args.comp_mode)
-    if not cfg.TEST.HAS_RPN:
-        imdb.set_proposal_method(cfg.TEST.PROPOSAL_METHOD)
-
-    test_net(net, imdb)
+    time_suffix = 'test_' + datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")
+    output_dir = get_output_dir(time_suffix, None)
+    test_net(net, output_dir)

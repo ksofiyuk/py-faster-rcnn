@@ -4,7 +4,8 @@ from datasets.image_sample import ImageFileSampleCV
 
 
 def load_bboxes_dataset_with_json_marking(dataset_path: str,
-                                          marking_filename='marking.json') -> list:
+                                          marking_filename: str,
+                                          max_size: int, scales: list) -> list:
     """Данная функция загружает набор данных, которые представлены совокупностью
     изображений и размеченными объектами.
 
@@ -20,7 +21,7 @@ def load_bboxes_dataset_with_json_marking(dataset_path: str,
                     y: координата левого верхнего угла по вертикали,
                     w: ширина объекта,
                     h: высота объекта,
-                    object_class: номер класса объекта, может отсутствовать (default: None),
+                    class: номер класса объекта, может отсутствовать (default: 1),
                         0 - класс фона
                     ignore: игнорировать или нет объект (Boolean),
                         этот параметр может отсутствовать (default: False)
@@ -32,6 +33,10 @@ def load_bboxes_dataset_with_json_marking(dataset_path: str,
     Args:
         dataset_path (str): путь к директории с разметкой и изображениями
         marking_filename (str): имя файла разметки
+        max_size (int): при прогоне сети по этому изображению, размер наибольшей стороны
+                        не может превосходить этого значения
+        scales (list):  на этом изображении алгоритм будет применён на нескольких масштабах,
+                        которые соответствуют изображениям с длиной наименьшей стороны из scales
 
     Returns:
         list: Список объектов типа ImageFileSampleCV
@@ -46,18 +51,21 @@ def load_bboxes_dataset_with_json_marking(dataset_path: str,
     for image_name, image_marking in marking.items():
         image_path = os.path.join(dataset_path, 'imgs', image_name)
 
-        if 'ignore' not in image_marking:
-            image_marking['ignore'] = False
-        if 'object_class' not in image_marking:
-            image_marking['object_class'] = None
+        for obj in image_marking:
+            if 'ignore' not in obj:
+                obj['ignore'] = False
+            if 'class' not in obj:
+                obj['class'] = 1
 
-        image_sample = ImageFileSampleCV(image_path, image_marking)
+        image_sample = ImageFileSampleCV(image_path, image_marking,
+                                         max_size, scales)
         samples.append(image_sample)
 
     return samples
 
 
-def load_images_from_directory_without_marking(images_path: str) -> list:
+def load_images_from_directory_without_marking(
+        images_path: str, max_size: int, scales: list) -> list:
     """Загружает все изображения в форматах *.jpg,*.jpeg,*.png
     из указанной директории без разметки.
 
@@ -69,7 +77,9 @@ def load_images_from_directory_without_marking(images_path: str) -> list:
         list: Список объектов типа ImageFileSampleCV
     """
 
-    files = filter(os.path.isfile, os.listdir(images_path))
+    files = [os.path.join(images_path, file_name)
+             for file_name in os.listdir(images_path)]
+    files = filter(os.path.isfile, files)
     images_files = filter(lambda x: x.endswith(('.jpg', '.png', '.jpeg')), files)
 
-    return [ImageFileSampleCV(image_path, []) for image_path in images_files]
+    return [ImageFileSampleCV(image_path, [], max_size, scales) for image_path in images_files]
